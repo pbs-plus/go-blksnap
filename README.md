@@ -5,18 +5,13 @@
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 Pure Go [ioctl](https://man7.org/linux/man-pages/man2/ioctl.2.html)-based client for the
-[veeamblksnap](https://github.com/veeam/blksnap) standalone kernel module
-(VAL-13.0 branch). No cgo, no C bindings — communicates directly with the
-kernel via `golang.org/x/sys/unix`.
+[veeamblksnap](https://github.com/veeam/blksnap) standalone kernel module.
+Supports both API generations (VAL-6.x and VAL-13.x) with automatic
+version detection. No cgo, no C bindings.
 
-The upstream blksnap module provides non-persistent block device snapshots with
-Change Block Tracking (CBT), enabling incremental and differential backup
-workflows.
-
-> **Important**: This library targets the [VAL-13.0 / VAL-13.0.1](https://github.com/veeam/blksnap/branches/all?query=VAL-13.0)
-> standalone branches (modules: `veeamblksnap` + `bdevfilter`).
-> The UAPI is identical between these branches — 13.0.1 only adds kernel
-> module fixes for 6.17+, with no API changes.
+> **Important**: This library auto-detects the loaded kernel module version:
+> - **v2** (VAL-13.0 / VAL-13.0.1): `/dev/veeamblksnap` + `/dev/bdevfilter`
+> - **v1** (VAL-6.0 through VAL-6.3.2): `/dev/veeamblksnap` only
 
 - [Features](#features)
 - [Requirements](#requirements)
@@ -24,34 +19,29 @@ workflows.
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [Architecture](#architecture)
-  - [Low-level API](#low-level-api)
-  - [High-level API](#high-level-api)
-- [How it works](#how-it-works)
-- [Compatibility](#compatibility)
+- [Type reference](#type-reference)
 - [License](#license)
 
 ## Features
 
-- **Zero dependencies beyond the Go standard library + `golang.org/x/sys`**
-- **Snapshot lifecycle**: Create, Take, Destroy, Collect via `/dev/blksnap-control`
-- **Change Block Tracking (CBT)**: Attach filter, read CBT bitmap, mark dirty blocks
-- **Snapshot events**: Wait for corrupted/no-space events with timeout
+- **Multi-version**: Auto-detects v1 (VAL-6.x) or v2 (VAL-13.x) API
+- **Snapshot lifecycle**: Create, Take, Destroy, Collect via `/dev/veeamblksnap`
+- **Change Block Tracking**: Attach filter, read CBT bitmap, mark dirty blocks
+- **Snapshot events**: Wait for corrupted / low-free-space events with timeout
 - **Session management**: goroutine-based event monitor, automatic cleanup
-- **Comprehensive unit tests**: 27 tests covering marshal/unmarshal, ioctl constants,
-  UUID parsing, event decoding, buffer layouts
+- **Zero cgo**: Only depends on `golang.org/x/sys/unix`
 
 ## Requirements
 
 - **Linux** (amd64 or arm64)
 - **Go 1.26+**
-- **veeamblksnap** and **bdevfilter** kernel modules loaded
+- **veeamblksnap** kernel module loaded (and **bdevfilter** for v2)
 - Root privileges (or `CAP_SYS_ADMIN`) for most operations
 
 ## Kernel module installation
 
-The blksnap kernel module must be installed and loaded before this library can
-be used. There are two main ways to obtain it, depending on your distribution
-and requirements.
+The veeamblksnap module must be installed and loaded before this library can
+be used. There are two ways to obtain it, depending on your distribution.
 
 ### Option 1: Pre-built packages (recommended)
 
@@ -59,7 +49,7 @@ Veeam distributes pre-built blksnap packages through the
 [Veeam software repository](https://helpcenter.veeam.com/docs/agentforlinux/userguide/installation_val.html)
 as part of Veeam Agent for Linux (free community edition available).
 
-#### All distributions — add the repository
+#### Add the repository
 
 1. Download the `veeam-release` package from the
    [Veeam Agent for Linux download page](https://www.veeam.com/linux-backup-download.html)
@@ -78,11 +68,9 @@ as part of Veeam Agent for Linux (free community edition available).
    sudo zypper in ./veeam-release* && sudo zypper refresh
    ```
 
-   This package imports the correct GPG key and configures the repository.
-
-> **Alternative**: If you can't use the release package, add the key and repo manually:
+> **Alternative**: If you can't use the release package, add the key manually:
 > ```bash
-> # Debian/Ubuntu — download the key directly (already binary format, no dearmor needed)
+> # Debian/Ubuntu
 > sudo curl -fsSL https://repository.veeam.com/keys/DEB-9BB5AC67.gpg \
 >   -o /usr/share/keyrings/veeam.gpg
 > echo "deb [signed-by=/usr/share/keyrings/veeam.gpg] https://repository.veeam.com/backup/linux/agent/dpkg/debian/public stable veeam" | \
@@ -91,104 +79,70 @@ as part of Veeam Agent for Linux (free community edition available).
 > # RHEL/Rocky/Alma
 > sudo rpm --import https://repository.veeam.com/keys/RPM-EFDCEA77
 > ```
-> Then add the repo file under `/etc/apt/sources.list.d/` or `/etc/yum.repos.d/`.
 
-#### Install the kernel module
-
-Once the repository is configured:
+#### Install the module
 
 ```bash
-# Debian 11–13 / Ubuntu 22.04 / 24.04 (blksnap)
+# Debian 11–13 / Ubuntu 22.04 / 24.04
 sudo apt-get install blksnap
 
-# Debian 10 / Ubuntu 20.04 and older (veeamsnap module)
-sudo apt-get install veeam
-```
-
-```bash
-# RHEL 9 / Rocky 9 / Alma 9 — pre-built kmod (no DKMS needed)
+# RHEL 9 / Rocky 9 / Alma 9 — pre-built kmod
 sudo dnf install kmod-blksnap
 
 # RHEL 9 / Rocky 9 / Alma 9 — DKMS (builds from source for your kernel)
-sudo dnf install epel-release
-sudo dnf install dkms
+sudo dnf install epel-release dkms
 sudo dnf install blksnap
 
 # RHEL 8 / Rocky 8 / Alma 8 — pre-built kmod (veeamsnap)
 sudo dnf install kmod-veeamsnap
-```
 
-```bash
-# SLES 15 SP3–SP7, SLES 16
+# SLES 15 SP3–SP7 / SLES 16
 sudo zypper install blksnap-kmp-default
-
-# SLES 12 SP5 (veeamsnap module)
-sudo zypper install veeamsnap-kmp-default
 ```
 
-#### Verify the module is loaded
+#### Verify
 
 ```bash
-# Check the module is present
 lsmod | grep -E 'veeamblksnap|bdevfilter'
-
-# Load them manually if needed
-sudo modprobe veeamblksnap
-sudo modprobe bdevfilter
-
-# Verify the control device exists
-ls -la /dev/veeamblksnap
+sudo modprobe veeamblksnap     # if not auto-loaded
+sudo modprobe bdevfilter       # v2 only
+ls -la /dev/veeamblksnap /dev/bdevfilter
 ```
 
 #### Secure Boot
 
-If Secure Boot is enabled, the pre-built module must be signed. Veeam provides
-a `blksnap-ueficert` package whose key must be enrolled with `mokutil`:
+If Secure Boot is enabled, enroll the Veeam key:
 
 ```bash
 sudo mokutil --import /path/to/blksnap.der
-# Reboot and follow the MOK Manager prompt to enroll the key
+# Reboot and follow the MOK Manager prompt
 ```
 
-### Option 2: Build from source (VAL-13.0 branch)
+### Option 2: Build from source
 
-For development or if pre-built packages don't support your kernel, build the
-standalone modules directly from the VAL-13.0 branch.
+For development or if pre-built packages don't support your kernel:
 
 ```bash
-# 1. Clone the VAL-13.0 branch
-git clone https://github.com/veeam/blksnap.git -b VAL-13.0
+git clone https://github.com/veeam/blksnap.git -b VAL-13.0.1
 cd blksnap/module
-
-# 2. Build against your running kernel
 make -C /lib/modules/$(uname -r)/build M=$(pwd) modules
-
-# 3. Install the modules
 sudo mkdir -p /lib/modules/$(uname -r)/extra
-sudo install -m 0644 veeamblksnap.ko /lib/modules/$(uname -r)/extra/
-sudo install -m 0644 bdevfilter.ko /lib/modules/$(uname -r)/extra/
+sudo install -m 0644 veeamblksnap.ko bdevfilter.ko /lib/modules/$(uname -r)/extra/
 sudo depmod -a
-
-# 4. Load
-sudo modprobe veeamblksnap
-sudo modprobe bdevfilter
-
-# 5. Verify
-ls -la /dev/veeamblksnap /dev/bdevfilter
+sudo modprobe veeamblksnap bdevfilter
 ```
 
-> **Note**: Ensure `linux-headers-$(uname -r)` is installed before building.
-> For Secure Boot systems, sign the modules or enroll the Veeam key via `mokutil`.
+> **Note**: Ensure `linux-headers-$(uname -r)` is installed. For kernel ≥ 6.17,
+> use the VAL-13.0.1 branch.
 
 ### Troubleshooting
 
-| Symptom | Likely cause | Solution |
-|---------|-------------|----------|
-| `modprobe: FATAL: Module veeamblksnap not found` | Module not installed | Install pre-built package or build from VAL-13.0 source |
-| `Failed to load module` | Kernel mismatch or missing headers | Ensure `kernel-devel`/`linux-headers` matches `uname -r` |
-| DKMS build fails (kernel ≥ 6.17) | Package too old for your kernel | Use VAL-13.0.1 branch: `git clone -b VAL-13.0.1 ...` and build manually |
-| Module loads but no `/dev/veeamblksnap` | Old veeamsnap module in use | Upgrade to veeamblksnap (kernel ≥ 5.10); check `lsmod \| grep veeam` |
-| Secure Boot blocks module | Unsigned module | Enroll `blksnap-ueficert` key with `mokutil` or disable Secure Boot |
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| `modprobe: FATAL: Module veeamblksnap not found` | Not installed | Install package or build from source |
+| DKMS build fails (kernel ≥ 6.17) | Package too old | Build from VAL-13.0.1 source |
+| `Failed to load module` | Kernel/headers mismatch | `kernel-devel`/`linux-headers` must match `uname -r` |
+| Secure Boot blocks module | Unsigned | Enroll key via `mokutil` or disable Secure Boot |
 
 ## Installation
 
@@ -208,7 +162,6 @@ import (
 )
 
 func main() {
-	// Create a snapshot session for /dev/sda1 and /dev/sda2
 	session, err := blksnap.CreateSession(
 		[]string{"/dev/sda1", "/dev/sda2"},
 		"/var/lib/blksnap/diff_storage",
@@ -219,19 +172,16 @@ func main() {
 	}
 	defer session.Close()
 
-	// Read the CBT bitmap for /dev/sda1
 	cbt, _ := session.CBTHandle("/dev/sda1")
 	info, _ := cbt.Info()
 	log.Printf("device=%d blocks, block_size=%d", info.BlockCount, info.BlockSize)
 
 	data, _ := cbt.Data()
-	log.Printf("changed blocks: %d", countChanged(data))
+	log.Printf("CBT map: %d bytes", len(data))
 
-	// Get the snapshot image device name
 	img, _ := cbt.Image()
 	log.Printf("snapshot image: %s", img)
 
-	// Check for runtime errors
 	if errs, ok := session.Errors(); ok {
 		for _, e := range errs {
 			log.Printf("snapshot error: %s", e)
@@ -242,36 +192,41 @@ func main() {
 
 ## Architecture
 
-The library mirrors the two kernel interfaces exposed by blksnap:
+The library auto-detects the API version on first use:
 
-| Kernel interface | Go type | Purpose |
-|------------------|---------|---------|
-| `/dev/veeamblksnap` | `Service`, `Snapshot` | Snapshot lifecycle (create, take, destroy, collect, events) |
-| `/dev/bdevfilter` | `Tracker` | Per-device CBT, attach/detach, snapshot participation |
+```go
+v, _ := blksnap.Detect() // returns APIV1 or APIV2
+```
+
+Two kernel interfaces are used depending on the version:
+
+| Interface | API | Go types | Purpose |
+|-----------|-----|----------|---------|
+| `/dev/veeamblksnap` | v1 + v2 | `Service`, `Snapshot` | Snapshot lifecycle |
+| `/dev/bdevfilter` | v2 only | `Tracker` | CBT via path-based device IDs |
+| `/dev/veeamblksnap` | v1 only | `Tracker` | CBT via major:minor device IDs |
 
 ### Low-level API
 
-Direct ioctl access for applications needing fine-grained control.
-
 ```go
-// Query module version
+// Version query (works on both v1 and v2)
 svc, _ := blksnap.OpenService()
-v, _ := svc.Version()
-fmt.Println(v) // "1.0.0.0"
+ver, _ := svc.Version()
+fmt.Println(ver) // "7.0.0.0"
 
 // List active snapshots
 ids, _ := svc.Collect()
 
-// Per-device CBT
+// CBT on v2 (path-based)
 t, _ := blksnap.OpenTracker("/dev/sda1")
 t.Attach()
 info, _ := t.CBTInfo()
-map := make([]byte, info.BlockCount)
-t.ReadCBTMap(0, info.BlockCount, map)
+buf := make([]byte, info.BlockCount)
+t.ReadCBTMap(0, info.BlockCount, buf)
 t.Detach()
 t.Close()
 
-// Create and take a snapshot
+// Create and take a snapshot (v2)
 snap, _ := blksnap.CreateSnapshot("/tmp/diff_storage", 1<<30)
 t.SnapshotAdd(snap.ID())
 snap.Take()
@@ -286,8 +241,9 @@ for {
             ev.Corrupted.OrigDevIDMajor,
             ev.Corrupted.OrigDevIDMinor,
             ev.Corrupted.ErrorCode)
-    case blksnap.EventNoSpace:
-        log.Printf("no space: requested=%d sectors", ev.NoSpace.RequestedSectors)
+    case blksnap.EventLowFreeSpace:
+        log.Printf("low space: requested=%d sectors",
+            ev.NoSpace.RequestedSectors)
     }
 }
 
@@ -295,9 +251,25 @@ snap.Destroy()
 snap.Close()
 ```
 
-### High-level API
+### v1-specific API
 
-The `Session` type encapsulates the full snapshot workflow:
+In v1, devices are identified by major:minor numbers and added at snapshot
+creation time:
+
+```go
+snap, _, _ := blksnap.CreateSnapshotV1([]blksnap.DevID{
+    {Major: 8, Minor: 1},  // /dev/sda1
+    {Major: 8, Minor: 2},  // /dev/sda2
+})
+
+// Get image device mappings
+images, _ := snap.CollectImages()
+for orig, img := range images {
+    fmt.Printf("%d:%d → %d:%d\n", orig.Major, orig.Minor, img.Major, img.Minor)
+}
+```
+
+### High-level Session API
 
 ```go
 session, _ := blksnap.CreateSession(
@@ -308,64 +280,24 @@ session, _ := blksnap.CreateSession(
     blksnap.WithEventTimeout(50*time.Millisecond),
 )
 defer session.Close()
-
-// session handles:
-//  1. Attaching trackers to each device
-//  2. Creating the snapshot with diff storage
-//  3. Adding devices to the snapshot
-//  4. Starting an event monitor goroutine
-//  5. Taking the snapshot
-//  6. On Close(): stopping the monitor, destroying the snapshot, releasing FDs
 ```
 
-### Type mapping
+## Type reference
 
-| C struct | Go type |
-|----------|---------|
-| `struct blksnap_version` | `Version` |
+| C struct (v2) | Go type |
+|---------------|---------|
+| `struct blksnap_version` | `ModuleVersion` |
 | `struct blksnap_uuid` | `UUID` |
 | `struct blksnap_cbtinfo` | `CBTInfo` |
-| `struct blksnap_cbtmap` | `CBTMap` |
 | `struct blksnap_sectors` | `SectorRange` |
-| `struct blksnap_cbtdirty` | (internal) |
-| `struct blksnap_snapshotadd` | (internal) |
 | `struct blksnap_snapshotinfo` | `SnapshotImageInfo` |
-| `struct blksnap_snapshot_create` | `SnapshotCreateParams` |
-| `struct blksnap_snapshot_collect` | (internal) |
 | `struct blksnap_snapshot_event` | `SnapshotEvent` |
 | `struct blksnap_event_corrupted` | `SnapshotEventCorrupted` |
-| `struct blksnap_event_no_space` | `SnapshotEventNoSpace` |
-
-## How it works
-
-### Change Block Tracking
-
-The CBT filter tracks which blocks have been modified between snapshots. Each
-byte in the CBT map corresponds to one block and stores the snapshot sequence
-number when that block was last changed. Comparing two snapshots' CBT data
-yields the delta for incremental/differential backups.
-
-### Copy-on-write
-
-When a write occurs to an original device under snapshot, the module reads the
-affected chunks and stores them in the difference storage before allowing the
-write. Read requests to the snapshot image are served from either the original
-device (unchanged data) or the difference storage (overwritten data).
-
-### Difference storage
-
-A single difference storage backs all devices in a snapshot. The library
-supports files on regular file systems. The kernel dynamically grows the file
-as needed, up to the configured limit.
-
-## Compatibility
-
-| Component | Version / Arch |
-|-----------|---------------|
-| Go | 1.26+ |
-| Linux kernel | Requires blksnap module (upstream integration branch) |
-| Architectures | amd64, arm64 |
-| C library | None required (pure Go) |
+| `struct blksnap_event_no_space` | `SnapshotEventLowFreeSpace` |
+| `enum blksnap_event_codes` | `SnapshotEventCode` |
+| `struct blk_snap_dev_t` (v1) | `DevID` |
+| `enum blk_snap_ioctl` (v1) | (internal) |
+| `struct bdevfilter_attach/ctl` (v2) | (internal) |
 
 ## License
 
@@ -374,7 +306,7 @@ MIT — see [LICENSE](LICENSE).
 ---
 
 Based on the [blksnap](https://github.com/veeam/blksnap) kernel module UAPI
-by Veeam Software Group GmbH. The ioctl protocol and constant values are derived
-from Linux kernel UAPI headers (`include/linux/blksnap.h`, `include/linux/blk-filter.h`)
-which are licensed under GPL-2.0 WITH Linux-syscall-note, permitting independent
-userspace implementations under any license.
+by Veeam Software Group GmbH. The ioctl protocol derives from kernel UAPI
+headers (`veeamblksnap.h`, `bdevfilter.h`, `blk_snap.h`) which are licensed
+under GPL-2.0 WITH Linux-syscall-note, permitting independent userspace
+implementations under any license.
