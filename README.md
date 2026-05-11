@@ -53,16 +53,20 @@ and requirements.
 
 ### Option 1: Pre-built packages (recommended)
 
-Veeam distributes pre-built blksnap packages as part of Veeam Agent for Linux.
-These are the easiest path for production use on common server distributions.
+Veeam distributes pre-built blksnap packages through the
+[Veeam software repository](https://helpcenter.veeam.com/docs/agentforlinux/userguide/installation_val.html)
+as part of Veeam Agent for Linux (free community edition available).
+You must add the Veeam repo before installing.
 
 #### Debian / Ubuntu
 
 ```bash
-# Add the Veeam repository, then:
+# Add the Veeam repository
+curl -fsSL https://repository.veeam.com/keys/veeam.gpg | sudo gpg --dearmor -o /usr/share/keyrings/veeam.gpg
+echo "deb [signed-by=/usr/share/keyrings/veeam.gpg] https://repository.veeam.com/backup/linux/agent-13/dpkg/debian/public stable veeam" | sudo tee /etc/apt/sources.list.d/veeam.list
+sudo apt-get update
 
 # Debian 11–13 / Ubuntu 22.04 / 24.04 (blksnap)
-sudo apt-get update
 sudo apt-get install blksnap
 
 # Debian 10 / Ubuntu 20.04 and older (veeamsnap module)
@@ -72,25 +76,35 @@ sudo apt-get install veeam
 #### RHEL / Rocky Linux / AlmaLinux
 
 ```bash
-# Add the Veeam repository and EPEL (for DKMS support), then:
+# Add the Veeam repository
+yum-config-manager --add-repo https://repository.veeam.com/backup/linux/agent-13/rpm/el/9/x86_64/veeam.repo
+# Enable EPEL (required for DKMS, pre-built kmod does not need it)
+sudo dnf install epel-release
 
-# RHEL 9 / Rocky 9 / Alma 9 — pre-built kmod
+# RHEL 9 / Rocky 9 / Alma 9 — pre-built kmod (no DKMS needed)
 sudo dnf install kmod-blksnap
 
 # RHEL 9 / Rocky 9 / Alma 9 — DKMS (builds from source on your kernel)
+sudo dnf install dkms
 sudo dnf install blksnap
 
 # RHEL 8 / Rocky 8 / Alma 8 — pre-built kmod (veeamsnap)
 sudo dnf install kmod-veeamsnap
 
 # RHEL 8 / Rocky 8 / Alma 8 — DKMS
+sudo dnf install dkms
 sudo dnf install veeam
 ```
+
+> **Note**: The repository URL includes the EL version (`el/9`). Adjust for
+> your release: `el/8`, `el/9`, or `el/10`.
 
 #### SLES / openSUSE
 
 ```bash
-# Add the Veeam repository, then:
+# Add the Veeam repository
+sudo zypper addrepo https://repository.veeam.com/backup/linux/agent-13/rpm/sles/SLE_15_SP7/x86_64/veeam.repo
+sudo zypper refresh
 
 # SLES 15 SP3–SP7, SLES 16
 sudo zypper install blksnap-kmp-default
