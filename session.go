@@ -103,16 +103,22 @@ func CreateSession(devices []string, diffStoragePath string, limitBytes uint64, 
 	}
 	cfg.logger.Info("blksnap snapshot created", "id", snap.ID().String())
 
+	// Cleanup helper for error returns: destroy and close the snapshot.
+	snapCleanup := func() {
+		_ = snap.Destroy()
+		_ = snap.Close()
+	}
+
 	// Add each device to the snapshot.
 	for _, dev := range devices {
 		t, err := OpenTracker(dev)
 		if err != nil {
-			_ = snap.Destroy()
+			snapCleanup()
 			return nil, fmt.Errorf("blksnap: session setup: %w", err)
 		}
 		if err := t.SnapshotAdd(snap.ID()); err != nil {
 			_ = t.Close()
-			_ = snap.Destroy()
+			snapCleanup()
 			return nil, fmt.Errorf("blksnap: add %s to snapshot: %w", dev, err)
 		}
 		_ = t.Close()
@@ -125,13 +131,13 @@ func CreateSession(devices []string, diffStoragePath string, limitBytes uint64, 
 	// The kernel sends an event when the first allocation is done.
 	ev, ok, err := snap.WaitEvent(uint32(cfg.eventTimeout.Milliseconds()))
 	if err != nil {
-		_ = snap.Destroy()
+		snapCleanup()
 		return nil, fmt.Errorf("blksnap: wait for initial allocation: %w", err)
 	}
 	if ok {
 		switch ev.Code {
 		case EventCorrupted:
-			_ = snap.Destroy()
+			snapCleanup()
 			return nil, fmt.Errorf("blksnap: snapshot corrupted for device %d:%d, code %d",
 				ev.Corrupted.OrigDevIDMajor, ev.Corrupted.OrigDevIDMinor, ev.Corrupted.ErrorCode)
 		case EventNoSpace:
@@ -139,6 +145,9 @@ func CreateSession(devices []string, diffStoragePath string, limitBytes uint64, 
 			state.mu.Lock()
 			state.errors = append(state.errors, "difference storage limit reached")
 			state.mu.Unlock()
+		default:
+			snapCleanup()
+			return nil, fmt.Errorf("blksnap: unexpected event code %d during init", ev.Code)
 		}
 	}
 
@@ -162,7 +171,7 @@ func CreateSession(devices []string, diffStoragePath string, limitBytes uint64, 
 	if err := snap.Take(); err != nil {
 		cancel()
 		session.wg.Wait()
-		_ = snap.Destroy()
+		snapCleanup()
 		return nil, fmt.Errorf("blksnap: take snapshot: %w", err)
 	}
 	cfg.logger.Info("blksnap snapshot taken", "id", snap.ID().String())
@@ -256,6 +265,12 @@ func (s *Session) monitorEvents(ctx context.Context, cfg sessionConfig) {
 			msg := fmt.Sprintf("difference storage limit reached (requested %d sectors)",
 				ev.NoSpace.RequestedSectors)
 			cfg.logger.Warn(msg, "id", s.snapshot.ID().String())
+			s.state.mu.Lock()
+			s.state.errors = append(s.state.errors, msg)
+			s.state.mu.Unlock()
+		default:
+			msg := fmt.Sprintf("unknown blksnap event code %d", ev.Code)
+			cfg.logger.Error(msg, "id", s.snapshot.ID().String())
 			s.state.mu.Lock()
 			s.state.errors = append(s.state.errors, msg)
 			s.state.mu.Unlock()

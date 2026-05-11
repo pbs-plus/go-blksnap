@@ -57,7 +57,7 @@ func (t *Tracker) Close() error {
 func (t *Tracker) Attach() (bool, error) {
 	buf := blkfilterAttachBuf()
 	if err := ioctl(t.fd, IoctlBlkfilterAttach, bytesPtr(buf)); err != nil {
-		if isErrno(err, ealready) {
+		if isErrno(err, unix.EALREADY) {
 			return false, nil
 		}
 		return false, fmt.Errorf("blksnap: attach filter to %s: %w", t.path, errnoToError(err))
@@ -179,24 +179,8 @@ func setOptPtr(buf []byte, ptr uintptr) {
 	nativeEndian.PutUint64(buf[len(buf)-8:], uint64(ptr))
 }
 
-// isErrno checks if the error matches a specific errno value.
-func isErrno(err error, target uintptr) bool {
-	type errnoer interface {
-		Errno() uintptr
-	}
-	if e, ok := err.(errnoer); ok {
-		return e.Errno() == target
-	}
-	return false
+// isErrno checks if err matches a specific unix.Errno value.
+func isErrno(err error, target unix.Errno) bool {
+	e, ok := err.(unix.Errno)
+	return ok && e == target
 }
-
-// Linux errno values used in comparisons.
-const (
-	enoent   = 2
-	eintr    = 4
-	esrch    = 3
-	enosys   = 38
-	ealready = 114
-	enospc   = 28
-	enodata  = 61
-)

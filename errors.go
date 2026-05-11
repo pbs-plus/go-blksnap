@@ -1,6 +1,10 @@
 package blksnap
 
-import "errors"
+import (
+	"errors"
+
+	"golang.org/x/sys/unix"
+)
 
 // Sentinel errors returned by this package.
 var (
@@ -13,34 +17,28 @@ var (
 )
 
 // errnoToError maps common Linux errno values to sentinel errors.
-func errnoToError(errno error) error {
-	if errno == nil {
+func errnoToError(err error) error {
+	if err == nil {
 		return nil
 	}
-	var errnum uintptr
-	switch e := errno.(type) {
-	case interface{ Temporary() bool }:
-		// os.SyscallError or similar
-		return errno
-	case interface{ Errno() uintptr }:
-		errnum = e.Errno()
-	default:
-		return errno
+	e, ok := err.(unix.Errno)
+	if !ok {
+		return err
 	}
-	switch errnum {
-	case 2: // ENOENT
+	switch e {
+	case unix.ENOENT:
 		return ErrNotFound
-	case 4: // EINTR
+	case unix.EINTR:
 		return ErrInterrupted
-	case 17: // EEXIST
+	case unix.EEXIST:
 		return ErrAlreadyExists
-	case 28: // ENOSPC
+	case unix.ENOSPC:
 		return ErrNoSpace
-	case 61: // ENODATA
+	case unix.ENODATA:
 		return ErrNoData
-	case 114: // EALREADY
+	case unix.EALREADY:
 		return ErrAlreadyExists
 	default:
-		return errno
+		return err
 	}
 }
