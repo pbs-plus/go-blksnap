@@ -56,16 +56,42 @@ and requirements.
 Veeam distributes pre-built blksnap packages through the
 [Veeam software repository](https://helpcenter.veeam.com/docs/agentforlinux/userguide/installation_val.html)
 as part of Veeam Agent for Linux (free community edition available).
-You must add the Veeam repo before installing.
 
-#### Debian / Ubuntu
+#### All distributions — add the repository
+
+1. Download the `veeam-release` package from the
+   [Veeam Agent for Linux download page](https://www.veeam.com/linux-backup-download.html)
+   (requires a free veeam.com account).
+
+2. Install the repository package:
+
+   ```bash
+   # Debian / Ubuntu
+   sudo dpkg -i ./veeam-release* && sudo apt-get update
+
+   # RHEL / Rocky / Alma
+   sudo rpm -ivh ./veeam-release* && sudo dnf check-update
+
+   # SLES / openSUSE
+   sudo zypper in ./veeam-release* && sudo zypper refresh
+   ```
+
+   This package imports the correct GPG key and configures the repository.
+
+> **Alternative**: If you can't use the release package, add the key and repo manually:
+> ```bash
+> # Debian/Ubuntu
+> curl -fsSL https://repository.veeam.com/keys/veeam.gpg | sudo apt-key add -
+> # RHEL/Rocky/Alma
+> sudo rpm --import https://repository.veeam.com/keys/RPM-EFDCEA77
+> ```
+> Then add the repo file under `/etc/apt/sources.list.d/` or `/etc/yum.repos.d/`.
+
+#### Install the kernel module
+
+Once the repository is configured:
 
 ```bash
-# Add the Veeam repository
-curl -fsSL https://repository.veeam.com/keys/veeam.gpg | sudo gpg --dearmor -o /usr/share/keyrings/veeam.gpg
-echo "deb [signed-by=/usr/share/keyrings/veeam.gpg] https://repository.veeam.com/backup/linux/agent-13/dpkg/debian/public stable veeam" | sudo tee /etc/apt/sources.list.d/veeam.list
-sudo apt-get update
-
 # Debian 11–13 / Ubuntu 22.04 / 24.04 (blksnap)
 sudo apt-get install blksnap
 
@@ -73,39 +99,20 @@ sudo apt-get install blksnap
 sudo apt-get install veeam
 ```
 
-#### RHEL / Rocky Linux / AlmaLinux
-
 ```bash
-# Add the Veeam repository
-yum-config-manager --add-repo https://repository.veeam.com/backup/linux/agent-13/rpm/el/9/x86_64/veeam.repo
-# Enable EPEL (required for DKMS, pre-built kmod does not need it)
-sudo dnf install epel-release
-
 # RHEL 9 / Rocky 9 / Alma 9 — pre-built kmod (no DKMS needed)
 sudo dnf install kmod-blksnap
 
-# RHEL 9 / Rocky 9 / Alma 9 — DKMS (builds from source on your kernel)
+# RHEL 9 / Rocky 9 / Alma 9 — DKMS (builds from source for your kernel)
+sudo dnf install epel-release
 sudo dnf install dkms
 sudo dnf install blksnap
 
 # RHEL 8 / Rocky 8 / Alma 8 — pre-built kmod (veeamsnap)
 sudo dnf install kmod-veeamsnap
-
-# RHEL 8 / Rocky 8 / Alma 8 — DKMS
-sudo dnf install dkms
-sudo dnf install veeam
 ```
 
-> **Note**: The repository URL includes the EL version (`el/9`). Adjust for
-> your release: `el/8`, `el/9`, or `el/10`.
-
-#### SLES / openSUSE
-
 ```bash
-# Add the Veeam repository
-sudo zypper addrepo https://repository.veeam.com/backup/linux/agent-13/rpm/sles/SLE_15_SP7/x86_64/veeam.repo
-sudo zypper refresh
-
 # SLES 15 SP3–SP7, SLES 16
 sudo zypper install blksnap-kmp-default
 
