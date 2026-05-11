@@ -5,22 +5,29 @@ import (
 	"fmt"
 )
 
+// ModuleVersion represents the kernel module version.
+type ModuleVersion struct {
+	Major    uint16
+	Minor    uint16
+	Revision uint16
+	Build    uint16
+}
+
+func (v ModuleVersion) String() string {
+	return fmt.Sprintf("%d.%d.%d.%d", v.Major, v.Minor, v.Revision, v.Build)
+}
+
 // UUID is a 16-byte unique identifier used by blksnap for snapshots.
 type UUID [16]byte
 
-// String returns the UUID in standard 8-4-4-4-12 hex format.
 func (u UUID) String() string {
 	return fmt.Sprintf("%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
 		u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7],
 		u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15])
 }
 
-// IsZero reports whether u is the zero UUID.
-func (u UUID) IsZero() bool {
-	return u == UUID{}
-}
+func (u UUID) IsZero() bool { return u == UUID{} }
 
-// ParseUUID parses a UUID string in standard 8-4-4-4-12 hex format.
 func ParseUUID(s string) (UUID, error) {
 	var u UUID
 	if err := parseUUIDHex(s, u[:]); err != nil {
@@ -29,7 +36,6 @@ func ParseUUID(s string) (UUID, error) {
 	return u, nil
 }
 
-// MustParseUUID parses a UUID string and panics on error.
 func MustParseUUID(s string) UUID {
 	u, err := ParseUUID(s)
 	if err != nil {
@@ -63,197 +69,72 @@ func parseUUIDHex(s string, dst []byte) error {
 	return nil
 }
 
-// unmarshalUUID reads a UUID from an ioctl result buffer at the given offset.
 func unmarshalUUID(data []byte, offset int) UUID {
 	var u UUID
 	copy(u[:], data[offset:offset+16])
 	return u
 }
 
-// marshalUUID writes a UUID into an ioctl argument buffer at the given offset.
 func marshalUUID(data []byte, offset int, u UUID) {
 	copy(data[offset:offset+16], u[:])
 }
 
-// Version represents the blksnap kernel module version.
-type Version struct {
-	Major    uint16
-	Minor    uint16
-	Revision uint16
-	Build    uint16
-}
-
-// String returns the version as "major.minor.revision.build".
-func (v Version) String() string {
-	return fmt.Sprintf("%d.%d.%d.%d", v.Major, v.Minor, v.Revision, v.Build)
-}
-
-// unmarshalVersion decodes a blksnap_version struct from the ioctl buffer.
-func unmarshalVersion(data []byte) Version {
-	return Version{
-		Major:    nativeEndian.Uint16(data[0:2]),
-		Minor:    nativeEndian.Uint16(data[2:4]),
-		Revision: nativeEndian.Uint16(data[4:6]),
-		Build:    nativeEndian.Uint16(data[6:8]),
-	}
-}
-
-// nativeEndian is the host byte order. All supported targets (linux/amd64,
-// linux/arm64) are little-endian.
+// nativeEndian is the host byte order (little-endian on all supported targets).
 var nativeEndian = binary.LittleEndian
 
 // CBTInfo holds change block tracking metadata for a block device.
 type CBTInfo struct {
-	DeviceCapacity uint64 // bytes
-	BlockSize      uint32 // bytes
+	DeviceCapacity uint64
+	BlockSize      uint32
 	BlockCount     uint32
 	GenerationID   UUID
 	ChangesNumber  uint8
 }
 
-// CBTMap represents a portion of the CBT bitmap.
-type CBTMap struct {
-	Offset uint32 // byte offset into the CBT bitmap
-	Data   []byte // read data
-}
-
 // SectorRange describes a region on a block device in sectors.
 type SectorRange struct {
-	Offset uint64 // sector offset from the beginning of the disk
-	Count  uint64 // number of sectors
+	Offset uint64
+	Count  uint64
 }
 
 // SnapshotEventCode identifies the type of snapshot event.
 type SnapshotEventCode int
 
 const (
-	EventCorrupted SnapshotEventCode = 0
-	EventNoSpace   SnapshotEventCode = 1
+	// EventLowFreeSpace (v1) / EventNoSpace (v2) — difference storage limit reached.
+	EventLowFreeSpace SnapshotEventCode = 0
+	// EventCorrupted — snapshot image corrupted.
+	EventCorrupted SnapshotEventCode = 1
 )
 
 // SnapshotEvent represents an event received from a held snapshot.
 type SnapshotEvent struct {
 	Code      SnapshotEventCode
-	TimeLabel int64 // timestamp of the event
+	TimeLabel int64
 	Corrupted *SnapshotEventCorrupted
-	NoSpace   *SnapshotEventNoSpace
+	NoSpace   *SnapshotEventLowFreeSpace
 }
 
-// SnapshotEventCorrupted provides details for the EventCorrupted event.
+// SnapshotEventCorrupted provides details for EventCorrupted.
 type SnapshotEventCorrupted struct {
 	OrigDevIDMajor uint32
 	OrigDevIDMinor uint32
 	ErrorCode      int32
 }
 
-// SnapshotEventNoSpace provides details for the EventNoSpace event.
-type SnapshotEventNoSpace struct {
+// SnapshotEventLowFreeSpace provides details when the diff storage is full.
+type SnapshotEventLowFreeSpace struct {
 	RequestedSectors uint64
 }
 
-// SnapshotImageInfo describes the snapshot image for a device.
+// SnapshotImageInfo describes the snapshot image for a device (v2 only).
 type SnapshotImageInfo struct {
 	ErrorCode int32
 	Image     string
 }
 
-// bdevfilter struct layouts (VAL-13.0).
-//
-// struct bdevfilter_attach (56 bytes):
-//
-//	__u64 devpath (0), __u8 name[32] (8), __u64 opt (40), __u32 optlen (48)
-//
-// struct bdevfilter_name (40 bytes):
-//
-//	__u64 devpath (0), __u8 name[32] (8)
-//
-// struct bdevfilter_ctl (56 bytes):
-//
-//	__u64 devpath (0), __u8 name[32] (8), __u32 cmd (40), __u32 optlen (44), __u64 opt (48)
-
-// bdevfilterAttachBuf builds the bdevfilter_attach argument buffer.
-func bdevfilterAttachBuf(devpathPtr uintptr) []byte {
-	buf := make([]byte, 56)
-	nativeEndian.PutUint64(buf[0:8], uint64(devpathPtr))
-	copy(buf[8:], filterName)
-	return buf
-}
-
-// bdevfilterNameBuf builds the bdevfilter_name argument buffer.
-func bdevfilterNameBuf(devpathPtr uintptr) []byte {
-	buf := make([]byte, 40)
-	nativeEndian.PutUint64(buf[0:8], uint64(devpathPtr))
-	copy(buf[8:], filterName)
-	return buf
-}
-
-// bdevfilterCtlBuf builds the bdevfilter_ctl argument buffer for a given
-// subcommand, option buffer, and device path pointer.
-func bdevfilterCtlBuf(cmd uint32, optBuf []byte, devpathPtr uintptr) []byte {
-	buf := make([]byte, 56)
-	nativeEndian.PutUint64(buf[0:8], uint64(devpathPtr))
-	copy(buf[8:], filterName)
-	nativeEndian.PutUint32(buf[40:44], cmd)
-	nativeEndian.PutUint32(buf[44:48], uint32(len(optBuf)))
-	return buf
-}
-
-// snapshotEventBuf creates the argument buffer for IOCTL_BLKSNAP_SNAPSHOT_WAIT_EVENT.
-//
-//	blksnap_snapshot_event layout:
-//	  id[16] at 0, timeout_ms at 16, code at 20, time_label at 24, data at 32.
-func snapshotEventBuf(id UUID, timeoutMs uint32) []byte {
-	buf := make([]byte, 4096)
-	marshalUUID(buf, 0, id)
-	nativeEndian.PutUint32(buf[16:20], timeoutMs)
-	return buf
-}
-
-// unmarshalSnapshotEvent decodes the result of IOCTL_BLKSNAP_SNAPSHOT_WAIT_EVENT.
-func unmarshalSnapshotEvent(buf []byte) SnapshotEvent {
-	ev := SnapshotEvent{
-		Code:      SnapshotEventCode(nativeEndian.Uint32(buf[20:24])),
-		TimeLabel: int64(nativeEndian.Uint64(buf[24:32])),
-	}
-	data := buf[32:]
-	switch ev.Code {
-	case EventCorrupted:
-		ev.Corrupted = &SnapshotEventCorrupted{
-			OrigDevIDMajor: nativeEndian.Uint32(data[0:4]),
-			OrigDevIDMinor: nativeEndian.Uint32(data[4:8]),
-			ErrorCode:      int32(nativeEndian.Uint32(data[8:12])),
-		}
-	case EventNoSpace:
-		ev.NoSpace = &SnapshotEventNoSpace{
-			RequestedSectors: nativeEndian.Uint64(data[0:8]),
-		}
-	}
-	return ev
-}
-
-// unmarshalCBTInfo decodes blksnap_cbtinfo from the ioctl buffer.
-func unmarshalCBTInfo(buf []byte) CBTInfo {
-	return CBTInfo{
-		DeviceCapacity: nativeEndian.Uint64(buf[0:8]),
-		BlockSize:      nativeEndian.Uint32(buf[8:12]),
-		BlockCount:     nativeEndian.Uint32(buf[12:16]),
-		GenerationID:   unmarshalUUID(buf, 16),
-		ChangesNumber:  buf[32],
-	}
-}
-
-// unmarshalSnapshotInfo decodes blksnap_snapshotinfo from the ioctl buffer.
-func unmarshalSnapshotInfo(buf []byte) SnapshotImageInfo {
-	var info SnapshotImageInfo
-	info.ErrorCode = int32(nativeEndian.Uint32(buf[0:4]))
-	raw := buf[4 : 4+imageDiskNameLen]
-	n := len(raw)
-	for i, b := range raw {
-		if b == 0 {
-			n = i
-			break
-		}
-	}
-	info.Image = string(raw[:n])
-	return info
+// DevID identifies a block device by major:minor (used in v1 API).
+type DevID struct {
+	Major uint32
+	Minor uint32
 }

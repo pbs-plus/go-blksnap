@@ -1,18 +1,14 @@
 package blksnap
 
-import (
-	"fmt"
-)
+import "fmt"
 
 // CBTHandle provides a high-level interface to Change Block Tracking on a
-// block device that has the blksnap filter attached.
+// block device that has the blksnap filter attached (v2) or is tracked (v1).
 type CBTHandle struct {
 	tracker *Tracker
 }
 
-// NewCBT creates a CBT handle for the given block device. The device must
-// have the blksnap filter already attached (typically done during session
-// creation).
+// NewCBT creates a CBT handle for the given block device.
 func NewCBT(devicePath string) (*CBTHandle, error) {
 	t, err := OpenTracker(devicePath)
 	if err != nil {
@@ -21,34 +17,24 @@ func NewCBT(devicePath string) (*CBTHandle, error) {
 	return &CBTHandle{tracker: t}, nil
 }
 
-// Close releases the underlying tracker.
-func (c *CBTHandle) Close() error {
-	return c.tracker.Close()
-}
+func (c *CBTHandle) Close() error { return c.tracker.Close() }
 
-// Info returns CBT metadata for the device.
-func (c *CBTHandle) Info() (CBTInfo, error) {
-	return c.tracker.CBTInfo()
-}
+func (c *CBTHandle) Info() (CBTInfo, error) { return c.tracker.CBTInfo() }
 
-// Data reads the full CBT bitmap for the device.
-// The returned byte slice has one byte per block, where 0 means unchanged
-// and 1 means changed since the last snapshot.
+// Data reads the full CBT bitmap.
 func (c *CBTHandle) Data() ([]byte, error) {
 	info, err := c.tracker.CBTInfo()
 	if err != nil {
 		return nil, err
 	}
-	mapSize := info.BlockCount
-	buf := make([]byte, mapSize)
-	if err := c.tracker.ReadCBTMap(0, mapSize, buf); err != nil {
+	buf := make([]byte, info.BlockCount)
+	if err := c.tracker.ReadCBTMap(0, info.BlockCount, buf); err != nil {
 		return nil, err
 	}
 	return buf, nil
 }
 
-// DataChunked reads the full CBT bitmap in chunks to avoid allocating
-// a single large buffer. The callback is invoked for each chunk.
+// DataChunked reads the full CBT bitmap in chunks.
 func (c *CBTHandle) DataChunked(chunkSize uint32, fn func(offset uint32, data []byte) error) error {
 	info, err := c.tracker.CBTInfo()
 	if err != nil {
@@ -71,7 +57,7 @@ func (c *CBTHandle) DataChunked(chunkSize uint32, fn func(offset uint32, data []
 	return nil
 }
 
-// Image returns the block device name of the snapshot image (e.g., "/dev/blksnap-image0").
+// Image returns the block device name of the snapshot image (v2 only).
 func (c *CBTHandle) Image() (string, error) {
 	info, err := c.tracker.SnapshotInfo()
 	if err != nil {
@@ -83,9 +69,7 @@ func (c *CBTHandle) Image() (string, error) {
 	return "/dev/" + info.Image, nil
 }
 
-// ErrorCode returns the snapshot error code for the device. A return of 0
-// means no errors occurred while holding the snapshot. -ENOSPC means the
-// snapshot overflowed.
+// ErrorCode returns the snapshot error code (v2 only).
 func (c *CBTHandle) ErrorCode() (int32, error) {
 	info, err := c.tracker.SnapshotInfo()
 	if err != nil {

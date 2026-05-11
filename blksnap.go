@@ -1,146 +1,125 @@
 // Package blksnap provides a pure Go interface to the veeamblksnap kernel
-// module (VAL-13.0 standalone branch) for block device snapshot management.
+// module for block device snapshot management.
 //
-// The veeamblksnap module provides Change Block Tracking (CBT) and snapshot
-// capabilities for block devices. This package communicates directly with
-// the kernel module via ioctl system calls.
+// It auto-detects the loaded module version and supports both API generations:
 //
-// # Overview
+//   - v2 (VAL-13.x): Uses /dev/veeamblksnap + /dev/bdevfilter with path-based
+//     device identification. The ioctl protocol aligns with the VAL-13.0/13.0.1
+//     standalone branches.
 //
-// The VAL-13.0 module exposes two interfaces:
+//   - v1 (VAL-6.x): Uses /dev/veeamblksnap only with major:minor device
+//     identification. The ioctl protocol aligns with the VAL-6.x standalone
+//     branches.
 //
-//  1. The control device (/dev/veeamblksnap) for snapshot lifecycle:
-//     Create, Take, Destroy snapshots; Collect active snapshots; Wait for
-//     snapshot events.
+// # Auto-detection
 //
-//  2. The bdevfilter device (/dev/bdevfilter) for per-block-device CBT:
-//     Attach/Detach the filter; Read CBT maps; Mark dirty blocks;
-//     Add devices to snapshots; Get snapshot image info.
-//
-// # High-Level API
-//
-// For most use cases, the high-level Session and CBT interfaces are
-// recommended:
-//
-//	session, err := blksnap.CreateSession(devices, diffStoragePath, limit)
-//	// ... read snapshot images via session.CBT() ...
-//	session.Close()
+// The first call to OpenService or OpenTracker probes the system and locks in
+// the API version. No explicit version selection is needed.
 //
 // # Requirements
 //
-// The veeamblksnap and bdevfilter kernel modules must be loaded.
+// The veeamblksnap (and for v2, bdevfilter) kernel modules must be loaded.
 // This package targets Linux only (linux/amd64, linux/arm64).
 package blksnap
 
-import "golang.org/x/sys/unix"
+import (
+	"fmt"
+	"os"
+	"sync"
 
-// Control device path for snapshot management ioctls.
-const ControlDevice = "/dev/" + ctlName
+	"golang.org/x/sys/unix"
+)
 
-// Filter device path for bdevfilter ioctls.
-const FilterDevice = "/dev/" + bdevFilterDev
+// APIVersion identifies the kernel module API generation.
+type APIVersion int
 
-const ctlName = "veeamblksnap"
-const bdevFilterDev = "bdevfilter"
+const (
+	// APIV1 is the VAL-6.x API. All operations use /dev/veeamblksnap only,
+	// devices are identified by major:minor numbers, and the snapshot create
+	// ioctl takes a device array directly.
+	APIV1 APIVersion = 1
+
+	// APIV2 is the VAL-13.x API. Snapshot control uses /dev/veeamblksnap,
+	// block device filter operations use /dev/bdevfilter, and devices are
+	// identified by filesystem path.
+	APIV2 APIVersion = 2
+)
+
+// ControlDevice returns the control device path for snapshot management.
+const ControlDevice = "/dev/veeamblksnap"
+
+// FilterDevice is the bdevfilter path (v2 only).
+const FilterDevice = "/dev/bdevfilter"
+
 const filterName = "blksnap"
 const imageDiskNameLen = 32
 const sectorSize = 512
 
-// BLKSNAP ioctl magic byte.
+// Image prefixes used by the kernel module for snapshot image device names.
+const (
+	V1ImagePrefix = "veeamblksnapimg" // VAL-6.x
+	V2ImagePrefix = "vbsnap"          // VAL-13.x
+)
+
+// BLKSNAP ioctl magic byte (same for v1 and v2).
 const blksnapMagic = 'V'
 
-// BDEVFILTER ioctl magic byte.
+// BDEVFILTER ioctl magic byte (v2 only).
 const bdevfilterMagic = 'F'
 
-// BLKSNAP ioctl command numbers.
-const (
-	ioctlVersion           = 0
-	ioctlSnapshotCreate    = 1
-	ioctlSnapshotDestroy   = 2
-	ioctlSnapshotTake      = 3
-	ioctlSnapshotCollect   = 4
-	ioctlSnapshotWaitEvent = 5
-)
-
-// BDEVFILTER ioctl command numbers (VAL-13.0).
-const (
-	bdevfilterAttach = 140
-	bdevfilterDetach = 141
-	bdevfilterCtl    = 142
-	bdevfilterSetlog = 143
-)
-
-// BLKFILTER_CTL subcommands for the blksnap filter.
-const (
-	blkfilterCtlCBTInfo      = 0
-	blkfilterCtlCBTMap       = 1
-	blkfilterCtlCBTDirty     = 2
-	blkfilterCtlSnapshotAdd  = 3
-	blkfilterCtlSnapshotInfo = 4
-)
-
-// IOC direction bits.
+// IOC direction bits and shifts (Linux ABI).
 const (
 	iocNone      = 0
 	iocWrite     = 1
 	iocRead      = 2
 	iocReadWrite = 3
-)
 
-// IOC field shifts (Linux ABI).
-const (
 	iocNrShift   = 0
 	iocTypeShift = 8
 	iocSizeShift = 16
 	iocDirShift  = 30
 )
 
-// Pre-computed ioctl request numbers.
-//
-//	_IOC(dir,type,nr,size) = (dir<<30)|(type<<8)|(nr<<0)|(size<<16)
-const (
-	// IOCTL_BLKSNAP_VERSION: _IOR(V, 0, blksnap_version={4*u16=8})
-	IoctlBlksnapVersion = (iocRead << iocDirShift) | (blksnapMagic << iocTypeShift) |
-		(ioctlVersion << iocNrShift) | (8 << iocSizeShift)
-
-	// IOCTL_BLKSNAP_SNAPSHOT_CREATE: _IOWR(V, 1, blksnap_snapshot_create={u64+u64+uuid[16]=32})
-	IoctlBlksnapSnapshotCreate = (iocReadWrite << iocDirShift) | (blksnapMagic << iocTypeShift) |
-		(ioctlSnapshotCreate << iocNrShift) | (32 << iocSizeShift)
-
-	// IOCTL_BLKSNAP_SNAPSHOT_DESTROY: _IOW(V, 2, uuid[16]=16)
-	IoctlBlksnapSnapshotDestroy = (iocWrite << iocDirShift) | (blksnapMagic << iocTypeShift) |
-		(ioctlSnapshotDestroy << iocNrShift) | (16 << iocSizeShift)
-
-	// IOCTL_BLKSNAP_SNAPSHOT_TAKE: _IOW(V, 3, uuid[16]=16)
-	IoctlBlksnapSnapshotTake = (iocWrite << iocDirShift) | (blksnapMagic << iocTypeShift) |
-		(ioctlSnapshotTake << iocNrShift) | (16 << iocSizeShift)
-
-	// IOCTL_BLKSNAP_SNAPSHOT_COLLECT: _IOR(V, 4, blksnap_snapshot_collect={u32+pad(4)+u64=16})
-	IoctlBlksnapSnapshotCollect = (iocRead << iocDirShift) | (blksnapMagic << iocTypeShift) |
-		(ioctlSnapshotCollect << iocNrShift) | (16 << iocSizeShift)
-
-	// IOCTL_BLKSNAP_SNAPSHOT_WAIT_EVENT: _IOR(V, 5, snapshot_event=4096)
-	IoctlBlksnapSnapshotWaitEvent = (iocRead << iocDirShift) | (blksnapMagic << iocTypeShift) |
-		(ioctlSnapshotWaitEvent << iocNrShift) | (4096 << iocSizeShift)
-
-	// BDEVFILTER_ATTACH: _IOWR(F, 140, bdevfilter_attach={u64+u8[32]+u64+u32+pad(4)=56})
-	IoctlBdevfilterAttach = (iocReadWrite << iocDirShift) | (bdevfilterMagic << iocTypeShift) |
-		(bdevfilterAttach << iocNrShift) | (56 << iocSizeShift)
-
-	// BDEVFILTER_DETACH: _IOWR(F, 141, bdevfilter_name={u64+u8[32]=40})
-	IoctlBdevfilterDetach = (iocReadWrite << iocDirShift) | (bdevfilterMagic << iocTypeShift) |
-		(bdevfilterDetach << iocNrShift) | (40 << iocSizeShift)
-
-	// BDEVFILTER_CTL: _IOWR(F, 142, bdevfilter_ctl={u64+u8[32]+u32+u32+u64=56})
-	IoctlBdevfilterCtl = (iocReadWrite << iocDirShift) | (bdevfilterMagic << iocTypeShift) |
-		(bdevfilterCtl << iocNrShift) | (56 << iocSizeShift)
-)
-
-// ioctl issues a raw ioctl syscall on fd with the given request and argument pointer.
-func ioctl(fd uintptr, req uintptr, arg uintptr) error {
+// ioctl issues a raw ioctl syscall.
+func ioctlSys(fd uintptr, req uintptr, arg uintptr) error {
 	_, _, errno := unix.Syscall(unix.SYS_IOCTL, fd, req, arg)
 	if errno != 0 {
 		return errno
 	}
 	return nil
+}
+
+// --- Auto-detection ---
+
+var (
+	detectOnce sync.Once
+	detected   APIVersion
+	detectErr  error
+)
+
+// Detect probes the system to determine which API version the loaded
+// kernel module supports. It opens the control device and checks whether
+// /dev/bdevfilter exists (v2) or not (v1). The result is cached.
+func Detect() (APIVersion, error) {
+	detectOnce.Do(func() {
+		// Try v2 first: bdevfilter device exists.
+		if _, err := os.Stat(FilterDevice); err == nil {
+			detected = APIV2
+			return
+		}
+		// Fall back to v1: control device must exist.
+		if _, err := os.Stat(ControlDevice); err == nil {
+			detected = APIV1
+			return
+		}
+		detectErr = fmt.Errorf("blksnap: neither %s nor %s found — is the kernel module loaded?",
+			ControlDevice, FilterDevice)
+	})
+	return detected, detectErr
+}
+
+// Detected returns the detected API version. It calls Detect internally.
+func Detected() APIVersion {
+	v, _ := Detect()
+	return v
 }
