@@ -169,14 +169,14 @@ func (t *Tracker) cbtInfoV1() (CBTInfo, error) {
 	if count == 0 {
 		return CBTInfo{}, fmt.Errorf("blksnap: no trackers found")
 	}
-	infoBuf := make([]byte, count*56)
+	infoBuf := make([]byte, count*48)
 	nativeEndian.PutUint32(param[0:4], count)
 	setOptPtr(param, bytesPtr(infoBuf))
 	if err := ioctlSys(t.v1ctl.Fd(), v1IoctlTrackerCollect, bytesPtr(param)); err != nil {
 		return CBTInfo{}, fmt.Errorf("blksnap: collect trackers: %w", errnoToError(err))
 	}
 	for i := range count {
-		off := int(i) * 56
+		off := int(i) * 48
 		mj := nativeEndian.Uint32(infoBuf[off : off+4])
 		mn := nativeEndian.Uint32(infoBuf[off+4 : off+8])
 		if mj == t.v1dev.Major && mn == t.v1dev.Minor {

@@ -101,10 +101,12 @@ type SectorRange struct {
 type SnapshotEventCode int
 
 const (
-	// EventLowFreeSpace (v1) / EventNoSpace (v2) — difference storage limit reached.
-	EventLowFreeSpace SnapshotEventCode = 0
 	// EventCorrupted — snapshot image corrupted.
-	EventCorrupted SnapshotEventCode = 1
+	// v1 kernel code 1, v2 kernel code 0.
+	EventCorrupted SnapshotEventCode = 0
+	// EventLowFreeSpace — difference storage limit reached (v1) or no space (v2).
+	// v1 kernel code 0, v2 kernel code 1.
+	EventLowFreeSpace SnapshotEventCode = 1
 )
 
 // SnapshotEvent represents an event received from a held snapshot.

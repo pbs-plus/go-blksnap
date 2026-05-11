@@ -58,11 +58,11 @@ func TestModuleVersionString(t *testing.T) {
 }
 
 func TestSnapshotEventCode(t *testing.T) {
-	if EventLowFreeSpace != 0 {
-		t.Errorf("EventLowFreeSpace=%d want 0", EventLowFreeSpace)
+	if EventCorrupted != 0 {
+		t.Errorf("EventCorrupted=%d want 0", EventCorrupted)
 	}
-	if EventCorrupted != 1 {
-		t.Errorf("EventCorrupted=%d want 1", EventCorrupted)
+	if EventLowFreeSpace != 1 {
+		t.Errorf("EventLowFreeSpace=%d want 1", EventLowFreeSpace)
 	}
 }
 
@@ -126,7 +126,7 @@ func TestUnmarshalCBTInfo(t *testing.T) {
 }
 
 func TestUnmarshalCBTInfoV1(t *testing.T) {
-	buf := make([]byte, 56)
+	buf := make([]byte, 48)
 	nativeEndian.PutUint32(buf[0:4], 8)     // dev_id.mj
 	nativeEndian.PutUint32(buf[4:8], 1)     // dev_id.mn
 	nativeEndian.PutUint32(buf[8:12], 4096) // blk_size
@@ -166,7 +166,7 @@ func TestUnmarshalSnapshotEvent_Corrupted(t *testing.T) {
 	id := MustParseUUID("550e8400-e29b-41d4-a716-446655440000")
 	marshalUUID(buf, 0, id)
 	nativeEndian.PutUint32(buf[16:20], 100)
-	nativeEndian.PutUint32(buf[20:24], 1) // EventCorrupted
+	nativeEndian.PutUint32(buf[20:24], 0) // EventCorrupted
 	nativeEndian.PutUint64(buf[24:32], 1234567890)
 	nativeEndian.PutUint32(buf[32:36], 8) // dev_id_mj
 	nativeEndian.PutUint32(buf[36:40], 1) // dev_id_mn
@@ -188,7 +188,7 @@ func TestUnmarshalSnapshotEvent_LowFreeSpace(t *testing.T) {
 	id := MustParseUUID("550e8400-e29b-41d4-a716-446655440000")
 	marshalUUID(buf, 0, id)
 	nativeEndian.PutUint32(buf[16:20], 100)
-	nativeEndian.PutUint32(buf[20:24], 0) // EventLowFreeSpace
+	nativeEndian.PutUint32(buf[20:24], 1) // EventLowFreeSpace
 	nativeEndian.PutUint64(buf[24:32], 1234567890)
 	nativeEndian.PutUint64(buf[32:40], 10000)
 	ev := unmarshalSnapshotEvent(buf)

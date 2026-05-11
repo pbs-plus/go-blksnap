@@ -290,8 +290,18 @@ func snapshotEventBuf(id UUID, timeoutMs uint32) []byte {
 }
 
 func unmarshalSnapshotEvent(buf []byte) SnapshotEvent {
+	code := SnapshotEventCode(nativeEndian.Uint32(buf[20:24]))
+	// v1 kernel: 0=low_free_space, 1=corrupted. Remap to v2 ordering.
+	if detected == APIV1 {
+		switch code {
+		case 0:
+			code = EventLowFreeSpace
+		case 1:
+			code = EventCorrupted
+		}
+	}
 	ev := SnapshotEvent{
-		Code:      SnapshotEventCode(nativeEndian.Uint32(buf[20:24])),
+		Code:      code,
 		TimeLabel: int64(nativeEndian.Uint64(buf[24:32])),
 	}
 	data := buf[32:]
