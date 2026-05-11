@@ -5,16 +5,16 @@
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 Pure Go [ioctl](https://man7.org/linux/man-pages/man2/ioctl.2.html)-based client for the
-[blksnap](https://github.com/veeam/blksnap) Linux kernel module. No cgo, no C
-bindings — communicates directly with the kernel via `golang.org/x/sys/unix`.
+[veeamblksnap](https://github.com/veeam/blksnap) standalone kernel module
+(VAL-13.0 branch). No cgo, no C bindings — communicates directly with the
+kernel via `golang.org/x/sys/unix`.
 
 The upstream blksnap module provides non-persistent block device snapshots with
 Change Block Tracking (CBT), enabling incremental and differential backup
 workflows.
 
-> **Important**: This library targets the [upstream kernel integration](https://github.com/veeam/blksnap/blob/master/doc/README-upstream-kernel.md)
-> branch of blksnap. For standalone kernel module branches (Veeam Agent for Linux),
-> see the [upstream repository branches](https://github.com/veeam/blksnap/branches).
+> **Important**: This library targets the [VAL-13.0](https://github.com/veeam/blksnap/tree/VAL-13.0)
+> standalone branch of blksnap (modules: `veeamblksnap` + `bdevfilter`).
 
 - [Features](#features)
 - [Requirements](#requirements)
@@ -42,7 +42,7 @@ workflows.
 
 - **Linux** (amd64 or arm64)
 - **Go 1.26+**
-- **blksnap kernel module** loaded (`modprobe blksnap`)
+- **veeamblksnap** and **bdevfilter** kernel modules loaded
 - Root privileges (or `CAP_SYS_ADMIN`) for most operations
 
 ## Kernel module installation
@@ -124,13 +124,14 @@ sudo zypper install veeamsnap-kmp-default
 
 ```bash
 # Check the module is present
-lsmod | grep -E 'blksnap|bdevfilter'
+lsmod | grep -E 'veeamblksnap|bdevfilter'
 
-# Load it manually if needed
-sudo modprobe blksnap
+# Load them manually if needed
+sudo modprobe veeamblksnap
+sudo modprobe bdevfilter
 
 # Verify the control device exists
-ls -la /dev/blksnap-control
+ls -la /dev/veeamblksnap
 ```
 
 #### Secure Boot
@@ -143,46 +144,43 @@ sudo mokutil --import /path/to/blksnap.der
 # Reboot and follow the MOK Manager prompt to enroll the key
 ```
 
-### Option 2: Build from source (upstream kernel integration)
+### Option 2: Build from source (VAL-13.0 branch)
 
-For development or if you need the latest upstream version, build a kernel
-with the blksnap patches applied. This is the path that this Go library was
-designed against.
+For development or if pre-built packages don't support your kernel, build the
+standalone modules directly from the VAL-13.0 branch.
 
 ```bash
-# 1. Clone Sergei Shtepa's Linux fork with the latest blksnap patches
-git clone https://github.com/SergeiShtepa/linux.git
-cd linux
-git checkout blksnap_lk6.15-v8   # use the latest blksnap-* branch
+# 1. Clone the VAL-13.0 branch
+git clone https://github.com/veeam/blksnap.git -b VAL-13.0
+cd blksnap/module
 
-# 2. Configure the kernel (enable blksnap in Device Drivers → Block Devices)
-cp /boot/config-$(uname -r) .config
-make olddefconfig
-# Enable: CONFIG_BLK_FILTER=y, CONFIG_BLKSNAP=y
+# 2. Build against your running kernel
+make -C /lib/modules/$(uname -r)/build M=$(pwd) modules
 
-# 3. Build and install
-make -j$(nproc)
-sudo make modules_install
-sudo make install
+# 3. Install the modules
+sudo mkdir -p /lib/modules/$(uname -r)/extra
+sudo install -m 0644 veeamblksnap.ko /lib/modules/$(uname -r)/extra/
+sudo install -m 0644 bdevfilter.ko /lib/modules/$(uname -r)/extra/
+sudo depmod -a
 
-# 4. Reboot into the new kernel
-sudo reboot
+# 4. Load
+sudo modprobe veeamblksnap
+sudo modprobe bdevfilter
 
 # 5. Verify
-modprobe blksnap
-ls -la /dev/blksnap-control
+ls -la /dev/veeamblksnap /dev/bdevfilter
 ```
 
-> **Note**: Building a kernel takes significant time and disk space (50+ GB).
-> For most users, the pre-built Veeam packages are a better option.
+> **Note**: Ensure `linux-headers-$(uname -r)` is installed before building.
+> For Secure Boot systems, sign the modules or enroll the Veeam key via `mokutil`.
 
 ### Troubleshooting
 
 | Symptom | Likely cause | Solution |
 |---------|-------------|----------|
-| `modprobe: FATAL: Module blksnap not found` | Module not installed | Install pre-built package or build kernel with patches |
+| `modprobe: FATAL: Module veeamblksnap not found` | Module not installed | Install pre-built package or build from VAL-13.0 source |
 | `Failed to load module` | Kernel mismatch or missing headers | Ensure `kernel-devel`/`linux-headers` matches `uname -r` |
-| Module loads but no `/dev/blksnap-control` | Old veeamsnap module in use | Upgrade to blksnap (kernel ≥ 5.10); check `lsmod \| grep veeam` |
+| Module loads but no `/dev/veeamblksnap` | Old veeamsnap module in use | Upgrade to veeamblksnap (kernel ≥ 5.10); check `lsmod \| grep veeam` |
 | Secure Boot blocks module | Unsigned module | Enroll `blksnap-ueficert` key with `mokutil` or disable Secure Boot |
 
 ## Installation
@@ -241,8 +239,8 @@ The library mirrors the two kernel interfaces exposed by blksnap:
 
 | Kernel interface | Go type | Purpose |
 |------------------|---------|---------|
-| `/dev/blksnap-control` | `Service`, `Snapshot` | Snapshot lifecycle (create, take, destroy, collect, events) |
-| Block device filter | `Tracker` | Per-device CBT, attach/detach, snapshot participation |
+| `/dev/veeamblksnap` | `Service`, `Snapshot` | Snapshot lifecycle (create, take, destroy, collect, events) |
+| `/dev/bdevfilter` | `Tracker` | Per-device CBT, attach/detach, snapshot participation |
 
 ### Low-level API
 

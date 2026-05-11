@@ -27,7 +27,6 @@ func TestParseUUID(t *testing.T) {
 				t.Errorf("ParseUUID(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
 			}
 			if err == nil {
-				// round-trip
 				got := id.String()
 				if got != tt.input {
 					t.Errorf("UUID.String() = %q, want %q", got, tt.input)
@@ -92,21 +91,17 @@ func TestSnapshotEventCode(t *testing.T) {
 }
 
 func TestIOCTLConstants(t *testing.T) {
-	// Verify pre-computed ioctl constants match expected values on amd64.
-	// These are computed from: _IOC(dir,type,nr,size)
-	// = (dir<<30) | (type<<8) | (nr<<0) | (size<<16)
-
 	if IoctlBlksnapVersion == 0 {
 		t.Error("IoctlBlksnapVersion should not be zero")
 	}
 	if IoctlBlksnapSnapshotCreate == 0 {
 		t.Error("IoctlBlksnapSnapshotCreate should not be zero")
 	}
-	if IoctlBlkfilterAttach == 0 {
-		t.Error("IoctlBlkfilterAttach should not be zero")
+	if IoctlBdevfilterAttach == 0 {
+		t.Error("IoctlBdevfilterAttach should not be zero")
 	}
-	if IoctlBlkfilterCtl == 0 {
-		t.Error("IoctlBlkfilterCtl should not be zero")
+	if IoctlBdevfilterCtl == 0 {
+		t.Error("IoctlBdevfilterCtl should not be zero")
 	}
 }
 
@@ -146,46 +141,55 @@ func TestBytesPtr_NonNil(t *testing.T) {
 	}
 }
 
-func TestBlkfilterAttachBuf(t *testing.T) {
-	buf := blkfilterAttachBuf()
-	if len(buf) != 48 {
-		t.Errorf("len(attachBuf) = %d, want 48", len(buf))
+func TestBdevfilterAttachBuf(t *testing.T) {
+	buf := bdevfilterAttachBuf(0xDEAD)
+	if len(buf) != 56 {
+		t.Errorf("len(attachBuf) = %d, want 56", len(buf))
 	}
-	if string(buf[:7]) != "blksnap" {
-		t.Errorf("name = %q, want \"blksnap\"", string(buf[:7]))
+	if nativeEndian.Uint64(buf[0:8]) != 0xDEAD {
+		t.Errorf("devpath = 0x%x, want 0xDEAD", nativeEndian.Uint64(buf[0:8]))
 	}
-}
-
-func TestBlkfilterDetachBuf(t *testing.T) {
-	buf := blkfilterDetachBuf()
-	if len(buf) != 32 {
-		t.Errorf("len(detachBuf) = %d, want 32", len(buf))
-	}
-	if string(buf[:7]) != "blksnap" {
-		t.Errorf("name = %q, want \"blksnap\"", string(buf[:7]))
+	if string(buf[8:15]) != filterName {
+		t.Errorf("name = %q, want %q", string(buf[8:15]), filterName)
 	}
 }
 
-func TestBlkfilterCtlBuf(t *testing.T) {
-	buf := blkfilterCtlBuf(1, make([]byte, 40))
-	if len(buf) != 48 {
-		t.Errorf("len(ctlBuf) = %d, want 48", len(buf))
+func TestBdevfilterNameBuf(t *testing.T) {
+	buf := bdevfilterNameBuf(0xBEEF)
+	if len(buf) != 40 {
+		t.Errorf("len(nameBuf) = %d, want 40", len(buf))
 	}
-	if string(buf[:7]) != "blksnap" {
-		t.Errorf("name = %q, want \"blksnap\"", string(buf[:7]))
+	if nativeEndian.Uint64(buf[0:8]) != 0xBEEF {
+		t.Errorf("devpath = 0x%x, want 0xBEEF", nativeEndian.Uint64(buf[0:8]))
 	}
-	if nativeEndian.Uint32(buf[32:36]) != 1 {
-		t.Errorf("cmd = %d, want 1", nativeEndian.Uint32(buf[32:36]))
+	if string(buf[8:15]) != filterName {
+		t.Errorf("name = %q, want %q", string(buf[8:15]), filterName)
 	}
-	if nativeEndian.Uint32(buf[36:40]) != 40 {
-		t.Errorf("optlen = %d, want 40", nativeEndian.Uint32(buf[36:40]))
+}
+
+func TestBdevfilterCtlBuf(t *testing.T) {
+	buf := bdevfilterCtlBuf(1, make([]byte, 40), 0xCAFE)
+	if len(buf) != 56 {
+		t.Errorf("len(ctlBuf) = %d, want 56", len(buf))
+	}
+	if nativeEndian.Uint64(buf[0:8]) != 0xCAFE {
+		t.Errorf("devpath = 0x%x, want 0xCAFE", nativeEndian.Uint64(buf[0:8]))
+	}
+	if string(buf[8:15]) != filterName {
+		t.Errorf("name = %q, want %q", string(buf[8:15]), filterName)
+	}
+	if nativeEndian.Uint32(buf[40:44]) != 1 {
+		t.Errorf("cmd = %d, want 1", nativeEndian.Uint32(buf[40:44]))
+	}
+	if nativeEndian.Uint32(buf[44:48]) != 40 {
+		t.Errorf("optlen = %d, want 40", nativeEndian.Uint32(buf[44:48]))
 	}
 }
 
 func TestSetOptPtr(t *testing.T) {
-	buf := make([]byte, 48)
+	buf := make([]byte, 56)
 	setOptPtr(buf, 0xDEADBEEF)
-	got := nativeEndian.Uint64(buf[40:48])
+	got := nativeEndian.Uint64(buf[48:56])
 	if got != 0xDEADBEEF {
 		t.Errorf("opt ptr = 0x%x, want 0xDEADBEEF", got)
 	}
@@ -218,12 +222,12 @@ func TestSnapshotEventBuf(t *testing.T) {
 
 func TestUnmarshalCBTInfo(t *testing.T) {
 	buf := make([]byte, 40)
-	nativeEndian.PutUint64(buf[0:8], 1073741824) // device_capacity
-	nativeEndian.PutUint32(buf[8:12], 4096)      // block_size
-	nativeEndian.PutUint32(buf[12:16], 262144)   // block_count
+	nativeEndian.PutUint64(buf[0:8], 1073741824)
+	nativeEndian.PutUint32(buf[8:12], 4096)
+	nativeEndian.PutUint32(buf[12:16], 262144)
 	id := MustParseUUID("550e8400-e29b-41d4-a716-446655440000")
 	marshalUUID(buf, 16, id)
-	buf[32] = 3 // changes_number
+	buf[32] = 3
 
 	info := unmarshalCBTInfo(buf)
 	if info.DeviceCapacity != 1073741824 {
@@ -245,21 +249,19 @@ func TestUnmarshalCBTInfo(t *testing.T) {
 
 func TestUnmarshalSnapshotInfo(t *testing.T) {
 	buf := make([]byte, 36)
-	// error_code = 0 (success)
-	copy(buf[4:], []byte("blksnap-image0\x00"))
+	copy(buf[4:], []byte("vbsnap-image0\x00"))
 
 	info := unmarshalSnapshotInfo(buf)
 	if info.ErrorCode != 0 {
 		t.Errorf("ErrorCode = %d, want 0", info.ErrorCode)
 	}
-	if info.Image != "blksnap-image0" {
-		t.Errorf("Image = %q, want \"blksnap-image0\"", info.Image)
+	if info.Image != "vbsnap-image0" {
+		t.Errorf("Image = %q, want \"vbsnap-image0\"", info.Image)
 	}
 }
 
 func TestUnmarshalSnapshotInfo_Error(t *testing.T) {
 	buf := make([]byte, 36)
-	// error_code = -28 (ENOSPC)
 	binaryEncodeInt32(buf[0:4], -28)
 
 	info := unmarshalSnapshotInfo(buf)
@@ -278,11 +280,9 @@ func TestUnmarshalSnapshotEvent_Corrupted(t *testing.T) {
 	nativeEndian.PutUint32(buf[16:20], 100)
 	nativeEndian.PutUint32(buf[20:24], 0) // EventCorrupted
 	nativeEndian.PutUint64(buf[24:32], 1234567890)
-	// event data at offset 32
 	nativeEndian.PutUint32(buf[32:36], 8) // dev_id_mj
 	nativeEndian.PutUint32(buf[36:40], 1) // dev_id_mn
-	// int32 -28 = 0xFFFFFFE4 in LE: e4 ff ff ff
-	buf[40] = 0xe4
+	buf[40] = 0xe4                        // err_code: int32 -28 = 0xFFFFFFE4 (LE: e4 ff ff ff)
 	buf[41] = 0xff
 	buf[42] = 0xff
 	buf[43] = 0xff
@@ -343,9 +343,6 @@ func TestUnmarshalVersion(t *testing.T) {
 }
 
 func TestIoctlConstants_Values(t *testing.T) {
-	// Verify that the ioctl constants match the _IOC() macro values.
-	// _IOC(dir,type,nr,size) = (dir<<30) | (type<<8) | (nr<<0) | (size<<16)
-
 	tests := []struct {
 		name string
 		got  uintptr
@@ -360,9 +357,9 @@ func TestIoctlConstants_Values(t *testing.T) {
 		{"SnapshotTake", IoctlBlksnapSnapshotTake, iocWrite, blksnapMagic, ioctlSnapshotTake, 16},
 		{"SnapshotCollect", IoctlBlksnapSnapshotCollect, iocRead, blksnapMagic, ioctlSnapshotCollect, 16},
 		{"SnapshotWaitEvent", IoctlBlksnapSnapshotWaitEvent, iocRead, blksnapMagic, ioctlSnapshotWaitEvent, 4096},
-		{"BlkfilterAttach", IoctlBlkfilterAttach, iocReadWrite, blkfilterType, blkfilterAttach, 48},
-		{"BlkfilterDetach", IoctlBlkfilterDetach, iocReadWrite, blkfilterType, blkfilterDetach, 32},
-		{"BlkfilterCtl", IoctlBlkfilterCtl, iocReadWrite, blkfilterType, blkfilterCtl, 48},
+		{"BdevfilterAttach", IoctlBdevfilterAttach, iocReadWrite, bdevfilterMagic, bdevfilterAttach, 56},
+		{"BdevfilterDetach", IoctlBdevfilterDetach, iocReadWrite, bdevfilterMagic, bdevfilterDetach, 40},
+		{"BdevfilterCtl", IoctlBdevfilterCtl, iocReadWrite, bdevfilterMagic, bdevfilterCtl, 56},
 	}
 
 	for _, tt := range tests {
@@ -376,7 +373,6 @@ func TestIoctlConstants_Values(t *testing.T) {
 	}
 }
 
-// binaryEncodeInt32 encodes a signed int32 in little-endian format.
 func binaryEncodeInt32(buf []byte, v int32) {
 	buf[0] = byte(v)
 	buf[1] = byte(v >> 8)

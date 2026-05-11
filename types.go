@@ -135,7 +135,6 @@ const (
 type SnapshotEvent struct {
 	Code      SnapshotEventCode
 	TimeLabel int64 // timestamp of the event
-	// Event-specific data:
 	Corrupted *SnapshotEventCorrupted
 	NoSpace   *SnapshotEventNoSpace
 }
@@ -154,49 +153,55 @@ type SnapshotEventNoSpace struct {
 
 // SnapshotImageInfo describes the snapshot image for a device.
 type SnapshotImageInfo struct {
-	ErrorCode int32  // 0 if no errors, -ENOSPC if overflow, etc.
-	Image     string // block device name of the snapshot image, or empty
+	ErrorCode int32
+	Image     string
 }
 
-// SnapshotCreateParams holds parameters for creating a snapshot.
-type SnapshotCreateParams struct {
-	DiffStorageLimitSectors uint64
-	DiffStorageFilename     string
-}
+// bdevfilter struct layouts (VAL-13.0).
+//
+// struct bdevfilter_attach (56 bytes):
+//
+//	__u64 devpath (0), __u8 name[32] (8), __u64 opt (40), __u32 optlen (48)
+//
+// struct bdevfilter_name (40 bytes):
+//
+//	__u64 devpath (0), __u8 name[32] (8)
+//
+// struct bdevfilter_ctl (56 bytes):
+//
+//	__u64 devpath (0), __u8 name[32] (8), __u32 cmd (40), __u32 optlen (44), __u64 opt (48)
 
-// blkfilterAttachBuf builds the blkfilter_attach argument buffer.
-func blkfilterAttachBuf() []byte {
-	buf := make([]byte, 48)
-	copy(buf[:], filterName)
+// bdevfilterAttachBuf builds the bdevfilter_attach argument buffer.
+func bdevfilterAttachBuf(devpathPtr uintptr) []byte {
+	buf := make([]byte, 56)
+	nativeEndian.PutUint64(buf[0:8], uint64(devpathPtr))
+	copy(buf[8:], filterName)
 	return buf
 }
 
-// blkfilterDetachBuf builds the blkfilter_detach argument buffer.
-func blkfilterDetachBuf() []byte {
-	buf := make([]byte, 32)
-	copy(buf[:], filterName)
+// bdevfilterNameBuf builds the bdevfilter_name argument buffer.
+func bdevfilterNameBuf(devpathPtr uintptr) []byte {
+	buf := make([]byte, 40)
+	nativeEndian.PutUint64(buf[0:8], uint64(devpathPtr))
+	copy(buf[8:], filterName)
 	return buf
 }
 
-// blkfilterCtlBuf builds the blkfilter_ctl argument buffer for a given
-// subcommand and option buffer pointer.
-func blkfilterCtlBuf(cmd uint32, optBuf []byte) []byte {
-	// blkfilter_ctl layout (48 bytes):
-	//   u8 name[32] (offset 0)
-	//   u32 cmd     (offset 32)
-	//   u32 optlen  (offset 36)
-	//   u64 opt     (offset 40) — userspace pointer to opt data
-	buf := make([]byte, 48)
-	copy(buf[:], filterName)
-	nativeEndian.PutUint32(buf[32:36], cmd)
-	nativeEndian.PutUint32(buf[36:40], uint32(len(optBuf)))
+// bdevfilterCtlBuf builds the bdevfilter_ctl argument buffer for a given
+// subcommand, option buffer, and device path pointer.
+func bdevfilterCtlBuf(cmd uint32, optBuf []byte, devpathPtr uintptr) []byte {
+	buf := make([]byte, 56)
+	nativeEndian.PutUint64(buf[0:8], uint64(devpathPtr))
+	copy(buf[8:], filterName)
+	nativeEndian.PutUint32(buf[40:44], cmd)
+	nativeEndian.PutUint32(buf[44:48], uint32(len(optBuf)))
 	return buf
 }
 
 // snapshotEventBuf creates the argument buffer for IOCTL_BLKSNAP_SNAPSHOT_WAIT_EVENT.
-// blksnap_snapshot_event layout:
 //
-//	id[16] at 0, timeout_ms at 16, code at 20, time_label at 24, data at 32.
+//	blksnap_snapshot_event layout:
+//	  id[16] at 0, timeout_ms at 16, code at 20, time_label at 24, data at 32.
 func snapshotEventBuf(id UUID, timeoutMs uint32) []byte {
 	buf := make([]byte, 4096)
 	marshalUUID(buf, 0, id)
@@ -241,7 +246,6 @@ func unmarshalCBTInfo(buf []byte) CBTInfo {
 func unmarshalSnapshotInfo(buf []byte) SnapshotImageInfo {
 	var info SnapshotImageInfo
 	info.ErrorCode = int32(nativeEndian.Uint32(buf[0:4]))
-	// image is a null-terminated string at offset 4, max length imageDiskNameLen
 	raw := buf[4 : 4+imageDiskNameLen]
 	n := len(raw)
 	for i, b := range raw {

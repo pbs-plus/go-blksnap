@@ -8,33 +8,28 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Tracker manages CBT and snapshot participation for a single block device.
-// It opens the block device with O_DIRECT and communicates with the blksnap
-// kernel filter via ioctl.
+// Tracker manages CBT and snapshot participation for a single block device
+// through the /dev/bdevfilter interface (VAL-13.0 standalone module).
+// It opens the bdevfilter device once and passes the block device path
+// as a string pointer in every ioctl.
 type Tracker struct {
-	file *os.File
-	fd   uintptr
-	path string
+	file    *os.File
+	fd      uintptr
+	devPath string
 }
 
-// OpenTracker opens a block device for blksnap CBT tracking.
-// The device must be a valid block device (e.g., /dev/sda1). The file is
-// opened with O_DIRECT as required by the kernel filter interface.
+// OpenTracker opens the bdevfilter device for blksnap CBT tracking.
+// The devicePath is the block device to operate on (e.g., /dev/sda1).
 func OpenTracker(devicePath string) (*Tracker, error) {
-	f, err := os.OpenFile(devicePath, os.O_RDONLY|unixFlags(unix.O_DIRECT), 0600)
+	f, err := os.OpenFile(FilterDevice, os.O_RDWR, 0)
 	if err != nil {
-		return nil, fmt.Errorf("blksnap: failed to open device %s: %w", devicePath, err)
+		return nil, fmt.Errorf("blksnap: failed to open %s: %w", FilterDevice, err)
 	}
 	return &Tracker{
-		file: f,
-		fd:   f.Fd(),
-		path: devicePath,
+		file:    f,
+		fd:      f.Fd(),
+		devPath: devicePath,
 	}, nil
-}
-
-// unixFlags converts golang.org/x/sys/unix flag values to int for os.OpenFile.
-func unixFlags(flags int) int {
-	return flags
 }
 
 // Close releases the file descriptor. The Tracker is unusable after Close.
@@ -46,30 +41,35 @@ func (t *Tracker) Close() error {
 	t.file = nil
 	t.fd = 0
 	if err != nil {
-		return fmt.Errorf("blksnap: failed to close device %s: %w", t.path, err)
+		return fmt.Errorf("blksnap: failed to close %s: %w", FilterDevice, err)
 	}
 	return nil
 }
 
-// Attach attaches the blksnap filter to the block device.
-// Returns true if the filter was newly attached, false if it was already
-// attached (EALREADY).
+// devPathPtr returns a uintptr to the block device path string.
+func (t *Tracker) devPathPtr() uintptr {
+	b := append([]byte(t.devPath), 0)
+	return uintptr(unsafe.Pointer(&b[0]))
+}
+
+// Attach attaches the blksnap filter to the block device through bdevfilter.
+// Returns true if the filter was newly attached, false if already attached (EALREADY).
 func (t *Tracker) Attach() (bool, error) {
-	buf := blkfilterAttachBuf()
-	if err := ioctl(t.fd, IoctlBlkfilterAttach, bytesPtr(buf)); err != nil {
+	buf := bdevfilterAttachBuf(t.devPathPtr())
+	if err := ioctl(t.fd, IoctlBdevfilterAttach, bytesPtr(buf)); err != nil {
 		if isErrno(err, unix.EALREADY) {
 			return false, nil
 		}
-		return false, fmt.Errorf("blksnap: attach filter to %s: %w", t.path, errnoToError(err))
+		return false, fmt.Errorf("blksnap: attach filter to %s: %w", t.devPath, errnoToError(err))
 	}
 	return true, nil
 }
 
 // Detach detaches the blksnap filter from the block device.
 func (t *Tracker) Detach() error {
-	buf := blkfilterDetachBuf()
-	if err := ioctl(t.fd, IoctlBlkfilterDetach, bytesPtr(buf)); err != nil {
-		return fmt.Errorf("blksnap: detach filter from %s: %w", t.path, errnoToError(err))
+	buf := bdevfilterNameBuf(t.devPathPtr())
+	if err := ioctl(t.fd, IoctlBdevfilterDetach, bytesPtr(buf)); err != nil {
+		return fmt.Errorf("blksnap: detach filter from %s: %w", t.devPath, errnoToError(err))
 	}
 	return nil
 }
@@ -77,35 +77,31 @@ func (t *Tracker) Detach() error {
 // CBTInfo retrieves change block tracking metadata for the device.
 func (t *Tracker) CBTInfo() (CBTInfo, error) {
 	optBuf := make([]byte, 40) // sizeof(blksnap_cbtinfo)
-	ctlBuf := blkfilterCtlBuf(blkfilterCtlCBTInfo, optBuf)
-
-	// Set opt pointer to the option buffer.
+	ctlBuf := bdevfilterCtlBuf(blkfilterCtlCBTInfo, optBuf, t.devPathPtr())
 	setOptPtr(ctlBuf, bytesPtr(optBuf))
 
-	if err := ioctl(t.fd, IoctlBlkfilterCtl, bytesPtr(ctlBuf)); err != nil {
-		return CBTInfo{}, fmt.Errorf("blksnap: get CBT info for %s: %w", t.path, errnoToError(err))
+	if err := ioctl(t.fd, IoctlBdevfilterCtl, bytesPtr(ctlBuf)); err != nil {
+		return CBTInfo{}, fmt.Errorf("blksnap: get CBT info for %s: %w", t.devPath, errnoToError(err))
 	}
 	return unmarshalCBTInfo(optBuf), nil
 }
 
 // ReadCBTMap reads a portion of the CBT bitmap.
-// offset is the byte offset into the bitmap, length is the number of bytes to read.
 func (t *Tracker) ReadCBTMap(offset, length uint32, dst []byte) error {
 	if uint32(len(dst)) < length {
 		return fmt.Errorf("blksnap: destination buffer too small: need %d, got %d", length, len(dst))
 	}
 
-	// blksnap_cbtmap layout: u32 offset, u32 length, u64 buffer
 	cbtBuf := make([]byte, 16)
 	nativeEndian.PutUint32(cbtBuf[0:4], offset)
 	nativeEndian.PutUint32(cbtBuf[4:8], length)
 	setOptPtr(cbtBuf, bytesPtr(dst[:length]))
 
-	ctlBuf := blkfilterCtlBuf(blkfilterCtlCBTMap, cbtBuf)
+	ctlBuf := bdevfilterCtlBuf(blkfilterCtlCBTMap, cbtBuf, t.devPathPtr())
 	setOptPtr(ctlBuf, bytesPtr(cbtBuf))
 
-	if err := ioctl(t.fd, IoctlBlkfilterCtl, bytesPtr(ctlBuf)); err != nil {
-		return fmt.Errorf("blksnap: read CBT map for %s: %w", t.path, errnoToError(err))
+	if err := ioctl(t.fd, IoctlBdevfilterCtl, bytesPtr(ctlBuf)); err != nil {
+		return fmt.Errorf("blksnap: read CBT map for %s: %w", t.devPath, errnoToError(err))
 	}
 	return nil
 }
@@ -115,11 +111,9 @@ func (t *Tracker) MarkDirty(ranges []SectorRange) error {
 	if len(ranges) == 0 {
 		return nil
 	}
-	// blksnap_cbtdirty layout: u32 count, u64 dirty_sectors
 	cbtBuf := make([]byte, 16)
 	nativeEndian.PutUint32(cbtBuf[0:4], uint32(len(ranges)))
 
-	// Build the sectors array and set pointer
 	sectorsBuf := make([]byte, len(ranges)*16)
 	for i, r := range ranges {
 		off := i * 16
@@ -128,26 +122,25 @@ func (t *Tracker) MarkDirty(ranges []SectorRange) error {
 	}
 	setOptPtr(cbtBuf, bytesPtr(sectorsBuf))
 
-	ctlBuf := blkfilterCtlBuf(blkfilterCtlCBTDirty, cbtBuf)
+	ctlBuf := bdevfilterCtlBuf(blkfilterCtlCBTDirty, cbtBuf, t.devPathPtr())
 	setOptPtr(ctlBuf, bytesPtr(cbtBuf))
 
-	if err := ioctl(t.fd, IoctlBlkfilterCtl, bytesPtr(ctlBuf)); err != nil {
-		return fmt.Errorf("blksnap: mark dirty for %s: %w", t.path, errnoToError(err))
+	if err := ioctl(t.fd, IoctlBdevfilterCtl, bytesPtr(ctlBuf)); err != nil {
+		return fmt.Errorf("blksnap: mark dirty for %s: %w", t.devPath, errnoToError(err))
 	}
 	return nil
 }
 
 // SnapshotAdd adds the device to a snapshot identified by id.
 func (t *Tracker) SnapshotAdd(id UUID) error {
-	// blksnap_snapshotadd layout: uuid id (16 bytes)
 	optBuf := make([]byte, 16)
 	marshalUUID(optBuf, 0, id)
 
-	ctlBuf := blkfilterCtlBuf(blkfilterCtlSnapshotAdd, optBuf)
+	ctlBuf := bdevfilterCtlBuf(blkfilterCtlSnapshotAdd, optBuf, t.devPathPtr())
 	setOptPtr(ctlBuf, bytesPtr(optBuf))
 
-	if err := ioctl(t.fd, IoctlBlkfilterCtl, bytesPtr(ctlBuf)); err != nil {
-		return fmt.Errorf("blksnap: add %s to snapshot: %w", t.path, errnoToError(err))
+	if err := ioctl(t.fd, IoctlBdevfilterCtl, bytesPtr(ctlBuf)); err != nil {
+		return fmt.Errorf("blksnap: add %s to snapshot: %w", t.devPath, errnoToError(err))
 	}
 	return nil
 }
@@ -155,11 +148,11 @@ func (t *Tracker) SnapshotAdd(id UUID) error {
 // SnapshotInfo retrieves snapshot image information for the device.
 func (t *Tracker) SnapshotInfo() (SnapshotImageInfo, error) {
 	optBuf := make([]byte, 36) // sizeof(blksnap_snapshotinfo)
-	ctlBuf := blkfilterCtlBuf(blkfilterCtlSnapshotInfo, optBuf)
+	ctlBuf := bdevfilterCtlBuf(blkfilterCtlSnapshotInfo, optBuf, t.devPathPtr())
 	setOptPtr(ctlBuf, bytesPtr(optBuf))
 
-	if err := ioctl(t.fd, IoctlBlkfilterCtl, bytesPtr(ctlBuf)); err != nil {
-		return SnapshotImageInfo{}, fmt.Errorf("blksnap: get snapshot info for %s: %w", t.path, errnoToError(err))
+	if err := ioctl(t.fd, IoctlBdevfilterCtl, bytesPtr(ctlBuf)); err != nil {
+		return SnapshotImageInfo{}, fmt.Errorf("blksnap: get snapshot info for %s: %w", t.devPath, errnoToError(err))
 	}
 	return unmarshalSnapshotInfo(optBuf), nil
 }
@@ -172,10 +165,9 @@ func bytesPtr(b []byte) uintptr {
 	return uintptr(unsafe.Pointer(&b[0]))
 }
 
-// setOptPtr writes a pointer value into the opt field of a blkfilter_ctl
-// or blksnap_cbtmap/btsnap_cbtdirty struct (at offset 40 for ctl, offset 8 for cbtmap/cbtdirty).
+// setOptPtr writes a pointer value into the opt field of a struct.
+// The opt field is always the last 8 bytes.
 func setOptPtr(buf []byte, ptr uintptr) {
-	// The opt field is the last 8 bytes of the struct.
 	nativeEndian.PutUint64(buf[len(buf)-8:], uint64(ptr))
 }
 
