@@ -194,21 +194,23 @@ func blkfilterCtlBuf(cmd uint32, optBuf []byte) []byte {
 }
 
 // snapshotEventBuf creates the argument buffer for IOCTL_BLKSNAP_SNAPSHOT_WAIT_EVENT.
-// id is set at offset 0 (16 bytes), timeout_ms at offset 20 (4 bytes).
+// blksnap_snapshot_event layout:
+//
+//	id[16] at 0, timeout_ms at 16, code at 20, time_label at 24, data at 32.
 func snapshotEventBuf(id UUID, timeoutMs uint32) []byte {
 	buf := make([]byte, 4096)
 	marshalUUID(buf, 0, id)
-	nativeEndian.PutUint32(buf[20:24], timeoutMs)
+	nativeEndian.PutUint32(buf[16:20], timeoutMs)
 	return buf
 }
 
 // unmarshalSnapshotEvent decodes the result of IOCTL_BLKSNAP_SNAPSHOT_WAIT_EVENT.
 func unmarshalSnapshotEvent(buf []byte) SnapshotEvent {
 	ev := SnapshotEvent{
-		Code:      SnapshotEventCode(nativeEndian.Uint32(buf[24:28])),
-		TimeLabel: int64(nativeEndian.Uint64(buf[28:36])),
+		Code:      SnapshotEventCode(nativeEndian.Uint32(buf[20:24])),
+		TimeLabel: int64(nativeEndian.Uint64(buf[24:32])),
 	}
-	data := buf[36:]
+	data := buf[32:]
 	switch ev.Code {
 	case EventCorrupted:
 		ev.Corrupted = &SnapshotEventCorrupted{

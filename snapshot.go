@@ -64,17 +64,10 @@ func (s *Service) Collect() ([]UUID, error) {
 	return ids, nil
 }
 
-// FD returns the file descriptor for use with Snapshot methods.
-func (s *Service) FD() uintptr {
-	return s.ctl.Fd()
-}
-
 // Snapshot manages a single blksnap snapshot via the control device.
-// It provides methods to Create, Take, Destroy snapshots and wait for
-// snapshot events.
 type Snapshot struct {
-	id UUID
-	fd uintptr
+	id  UUID
+	ctl *os.File
 }
 
 // CreateSnapshot creates a new snapshot with the given difference storage
@@ -109,7 +102,7 @@ func CreateSnapshot(diffStorageFile string, limitBytes uint64) (*Snapshot, error
 	}
 
 	id := unmarshalUUID(paramBuf, 16)
-	return &Snapshot{id: id, fd: f.Fd()}, nil
+	return &Snapshot{id: id, ctl: f}, nil
 }
 
 // OpenSnapshot opens an existing snapshot by its UUID.
@@ -118,7 +111,7 @@ func OpenSnapshot(id UUID) (*Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("blksnap: open %s: %w", ControlDevice, err)
 	}
-	return &Snapshot{id: id, fd: f.Fd()}, nil
+	return &Snapshot{id: id, ctl: f}, nil
 }
 
 // ID returns the snapshot UUID.
@@ -126,12 +119,23 @@ func (s *Snapshot) ID() UUID {
 	return s.id
 }
 
+// Close closes the snapshot's control device file descriptor.
+// After Close, no further operations are valid.
+func (s *Snapshot) Close() error {
+	if s.ctl == nil {
+		return nil
+	}
+	err := s.ctl.Close()
+	s.ctl = nil
+	return err
+}
+
 // Take takes the snapshot, creating snapshot images of all attached devices
 // and switching the CBT tables.
 func (s *Snapshot) Take() error {
 	buf := make([]byte, 16)
 	marshalUUID(buf, 0, s.id)
-	if err := ioctl(s.fd, IoctlBlksnapSnapshotTake, bytesPtr(buf)); err != nil {
+	if err := ioctl(s.ctl.Fd(), IoctlBlksnapSnapshotTake, bytesPtr(buf)); err != nil {
 		return fmt.Errorf("blksnap: take snapshot %s: %w", s.id, errnoToError(err))
 	}
 	return nil
@@ -142,7 +146,7 @@ func (s *Snapshot) Take() error {
 func (s *Snapshot) Destroy() error {
 	buf := make([]byte, 16)
 	marshalUUID(buf, 0, s.id)
-	if err := ioctl(s.fd, IoctlBlksnapSnapshotDestroy, bytesPtr(buf)); err != nil {
+	if err := ioctl(s.ctl.Fd(), IoctlBlksnapSnapshotDestroy, bytesPtr(buf)); err != nil {
 		return fmt.Errorf("blksnap: destroy snapshot %s: %w", s.id, errnoToError(err))
 	}
 	return nil
@@ -153,7 +157,7 @@ func (s *Snapshot) Destroy() error {
 // if interrupted, true with the event otherwise.
 func (s *Snapshot) WaitEvent(timeoutMs uint32) (SnapshotEvent, bool, error) {
 	buf := snapshotEventBuf(s.id, timeoutMs)
-	if err := ioctl(s.fd, IoctlBlksnapSnapshotWaitEvent, bytesPtr(buf)); err != nil {
+	if err := ioctl(s.ctl.Fd(), IoctlBlksnapSnapshotWaitEvent, bytesPtr(buf)); err != nil {
 		se := errnoToError(err)
 		if se == ErrNotFound || se == ErrInterrupted {
 			return SnapshotEvent{}, false, nil

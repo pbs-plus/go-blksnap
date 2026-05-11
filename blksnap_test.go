@@ -211,8 +211,8 @@ func TestSnapshotEventBuf(t *testing.T) {
 	if gotID != id {
 		t.Errorf("id = %s, want %s", gotID, id)
 	}
-	if nativeEndian.Uint32(buf[20:24]) != 5000 {
-		t.Errorf("timeout = %d, want 5000", nativeEndian.Uint32(buf[20:24]))
+	if nativeEndian.Uint32(buf[16:20]) != 5000 {
+		t.Errorf("timeout = %d, want 5000", nativeEndian.Uint32(buf[16:20]))
 	}
 }
 
@@ -275,16 +275,17 @@ func TestUnmarshalSnapshotEvent_Corrupted(t *testing.T) {
 	buf := make([]byte, 4096)
 	id := MustParseUUID("550e8400-e29b-41d4-a716-446655440000")
 	marshalUUID(buf, 0, id)
-	nativeEndian.PutUint32(buf[20:24], 100)
-	nativeEndian.PutUint32(buf[24:28], 0) // EventCorrupted
-	nativeEndian.PutUint64(buf[28:36], 1234567890)
-	// event data at offset 36
-	nativeEndian.PutUint32(buf[36:40], 8) // dev_id_mj
-	nativeEndian.PutUint32(buf[40:44], 1) // dev_id_mn
-	buf[44] = 0xe4                        // err_code: int32 -28 = 0xFFFFFFE4 (LE: e4 ff ff ff)
-	buf[45] = 0xff
-	buf[46] = 0xff
-	buf[47] = 0xff
+	nativeEndian.PutUint32(buf[16:20], 100)
+	nativeEndian.PutUint32(buf[20:24], 0) // EventCorrupted
+	nativeEndian.PutUint64(buf[24:32], 1234567890)
+	// event data at offset 32
+	nativeEndian.PutUint32(buf[32:36], 8) // dev_id_mj
+	nativeEndian.PutUint32(buf[36:40], 1) // dev_id_mn
+	// int32 -28 = 0xFFFFFFE4 in LE: e4 ff ff ff
+	buf[40] = 0xe4
+	buf[41] = 0xff
+	buf[42] = 0xff
+	buf[43] = 0xff
 
 	ev := unmarshalSnapshotEvent(buf)
 	if ev.Code != EventCorrupted {
@@ -311,10 +312,10 @@ func TestUnmarshalSnapshotEvent_NoSpace(t *testing.T) {
 	buf := make([]byte, 4096)
 	id := MustParseUUID("550e8400-e29b-41d4-a716-446655440000")
 	marshalUUID(buf, 0, id)
-	nativeEndian.PutUint32(buf[20:24], 100)
-	nativeEndian.PutUint32(buf[24:28], 1) // EventNoSpace
-	nativeEndian.PutUint64(buf[28:36], 1234567890)
-	nativeEndian.PutUint64(buf[36:44], 10000) // requested_nr_sect
+	nativeEndian.PutUint32(buf[16:20], 100)
+	nativeEndian.PutUint32(buf[20:24], 1) // EventNoSpace
+	nativeEndian.PutUint64(buf[24:32], 1234567890)
+	nativeEndian.PutUint64(buf[32:40], 10000) // requested_nr_sect
 
 	ev := unmarshalSnapshotEvent(buf)
 	if ev.Code != EventNoSpace {

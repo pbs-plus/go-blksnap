@@ -12,39 +12,43 @@ import (
 // It opens the block device with O_DIRECT and communicates with the blksnap
 // kernel filter via ioctl.
 type Tracker struct {
+	file *os.File
 	fd   uintptr
 	path string
 }
 
 // OpenTracker opens a block device for blksnap CBT tracking.
-// The device must be a valid block device (e.g., /dev/sda1).
+// The device must be a valid block device (e.g., /dev/sda1). The file is
+// opened with O_DIRECT as required by the kernel filter interface.
 func OpenTracker(devicePath string) (*Tracker, error) {
-	f, err := os.OpenFile(devicePath, os.O_RDONLY|os.O_SYNC, 0600)
+	f, err := os.OpenFile(devicePath, os.O_RDONLY|unixFlags(unix.O_DIRECT), 0600)
 	if err != nil {
 		return nil, fmt.Errorf("blksnap: failed to open device %s: %w", devicePath, err)
 	}
 	return &Tracker{
+		file: f,
 		fd:   f.Fd(),
 		path: devicePath,
 	}, nil
 }
 
+// unixFlags converts golang.org/x/sys/unix flag values to int for os.OpenFile.
+func unixFlags(flags int) int {
+	return flags
+}
+
 // Close releases the file descriptor. The Tracker is unusable after Close.
 func (t *Tracker) Close() error {
-	if t.fd == 0 {
+	if t.file == nil {
 		return nil
 	}
-	err := unixClose(int(t.fd))
+	err := t.file.Close()
+	t.file = nil
 	t.fd = 0
 	if err != nil {
 		return fmt.Errorf("blksnap: failed to close device %s: %w", t.path, err)
 	}
 	return nil
-}
-
-// unixClose wraps the close syscall.
-func unixClose(fd int) error {
-	return unix.Close(fd)
 }
 
 // Attach attaches the blksnap filter to the block device.

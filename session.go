@@ -203,11 +203,15 @@ func (s *Session) Close() error {
 	}
 	s.wg.Wait()
 	if s.snapshot != nil {
-		if err := s.snapshot.Destroy(); err != nil {
-			s.snapshot = nil
+		err := s.snapshot.Destroy()
+		closeErr := s.snapshot.Close()
+		s.snapshot = nil
+		if err != nil {
 			return err
 		}
-		s.snapshot = nil
+		if closeErr != nil {
+			return closeErr
+		}
 	}
 	return nil
 }

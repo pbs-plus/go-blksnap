@@ -32,8 +32,6 @@ func errnoToError(errno error) error {
 		return ErrNotFound
 	case 4: // EINTR
 		return ErrInterrupted
-	case 3: // ESRCH
-		return ErrNotFound
 	case 17: // EEXIST
 		return ErrAlreadyExists
 	case 28: // ENOSPC
