@@ -1,4 +1,4 @@
-module github.com/sralmerol/go-blksnap
+module github.com/pbs-plus/go-blksnap
 
 go 1.26.2
 

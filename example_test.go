@@ -3,7 +3,7 @@ package blksnap_test
 import (
 	"fmt"
 
-	"github.com/sralmerol/go-blksnap"
+	"github.com/pbs-plus/go-blksnap"
 )
 
 // ExampleUUID demonstrates UUID parsing and formatting.
