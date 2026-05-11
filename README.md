@@ -18,6 +18,7 @@ workflows.
 
 - [Features](#features)
 - [Requirements](#requirements)
+- [Kernel module installation](#kernel-module-installation)
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [Architecture](#architecture)
@@ -43,6 +44,125 @@ workflows.
 - **Go 1.26+**
 - **blksnap kernel module** loaded (`modprobe blksnap`)
 - Root privileges (or `CAP_SYS_ADMIN`) for most operations
+
+## Kernel module installation
+
+The blksnap kernel module must be installed and loaded before this library can
+be used. There are two main ways to obtain it, depending on your distribution
+and requirements.
+
+### Option 1: Pre-built packages (recommended)
+
+Veeam distributes pre-built blksnap packages as part of Veeam Agent for Linux.
+These are the easiest path for production use on common server distributions.
+
+#### Debian / Ubuntu
+
+```bash
+# Add the Veeam repository, then:
+
+# Debian 11–13 / Ubuntu 22.04 / 24.04 (blksnap)
+sudo apt-get update
+sudo apt-get install blksnap
+
+# Debian 10 / Ubuntu 20.04 and older (veeamsnap module)
+sudo apt-get install veeam
+```
+
+#### RHEL / Rocky Linux / AlmaLinux
+
+```bash
+# Add the Veeam repository and EPEL (for DKMS support), then:
+
+# RHEL 9 / Rocky 9 / Alma 9 — pre-built kmod
+sudo dnf install kmod-blksnap
+
+# RHEL 9 / Rocky 9 / Alma 9 — DKMS (builds from source on your kernel)
+sudo dnf install blksnap
+
+# RHEL 8 / Rocky 8 / Alma 8 — pre-built kmod (veeamsnap)
+sudo dnf install kmod-veeamsnap
+
+# RHEL 8 / Rocky 8 / Alma 8 — DKMS
+sudo dnf install veeam
+```
+
+#### SLES / openSUSE
+
+```bash
+# Add the Veeam repository, then:
+
+# SLES 15 SP3–SP7, SLES 16
+sudo zypper install blksnap-kmp-default
+
+# SLES 12 SP5 (veeamsnap module)
+sudo zypper install veeamsnap-kmp-default
+```
+
+#### Verify the module is loaded
+
+```bash
+# Check the module is present
+lsmod | grep -E 'blksnap|bdevfilter'
+
+# Load it manually if needed
+sudo modprobe blksnap
+
+# Verify the control device exists
+ls -la /dev/blksnap-control
+```
+
+#### Secure Boot
+
+If Secure Boot is enabled, the pre-built module must be signed. Veeam provides
+a `blksnap-ueficert` package whose key must be enrolled with `mokutil`:
+
+```bash
+sudo mokutil --import /path/to/blksnap.der
+# Reboot and follow the MOK Manager prompt to enroll the key
+```
+
+### Option 2: Build from source (upstream kernel integration)
+
+For development or if you need the latest upstream version, build a kernel
+with the blksnap patches applied. This is the path that this Go library was
+designed against.
+
+```bash
+# 1. Clone Sergei Shtepa's Linux fork with the latest blksnap patches
+git clone https://github.com/SergeiShtepa/linux.git
+cd linux
+git checkout blksnap_lk6.15-v8   # use the latest blksnap-* branch
+
+# 2. Configure the kernel (enable blksnap in Device Drivers → Block Devices)
+cp /boot/config-$(uname -r) .config
+make olddefconfig
+# Enable: CONFIG_BLK_FILTER=y, CONFIG_BLKSNAP=y
+
+# 3. Build and install
+make -j$(nproc)
+sudo make modules_install
+sudo make install
+
+# 4. Reboot into the new kernel
+sudo reboot
+
+# 5. Verify
+modprobe blksnap
+ls -la /dev/blksnap-control
+```
+
+> **Note**: Building a kernel takes significant time and disk space (50+ GB).
+> For most users, the pre-built Veeam packages are a better option.
+
+### Troubleshooting
+
+| Symptom | Likely cause | Solution |
+|---------|-------------|----------|
+| `modprobe: FATAL: Module blksnap not found` | Module not installed | Install pre-built package or build kernel with patches |
+| `Failed to load module` | Kernel mismatch or missing headers | Ensure `kernel-devel`/`linux-headers` matches `uname -r` |
+| Module loads but no `/dev/blksnap-control` | Old veeamsnap module in use | Upgrade to blksnap (kernel ≥ 5.10); check `lsmod \| grep veeam` |
+| Secure Boot blocks module | Unsigned module | Enroll `blksnap-ueficert` key with `mokutil` or disable Secure Boot |
 
 ## Installation
 
