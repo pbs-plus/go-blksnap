@@ -3,6 +3,7 @@ package blksnap
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"unsafe"
 )
 
@@ -100,6 +101,7 @@ func CreateSnapshot(diffStorageFile string, limitBytes uint64) (*Snapshot, error
 		_ = f.Close()
 		return nil, fmt.Errorf("blksnap: create snapshot: %w", errnoToError(err))
 	}
+	runtime.KeepAlive(filenameBytes)
 
 	id := unmarshalUUID(paramBuf, 16)
 	return &Snapshot{id: id, ctl: f}, nil

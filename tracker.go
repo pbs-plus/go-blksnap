@@ -13,9 +13,10 @@ import (
 // It opens the bdevfilter device once and passes the block device path
 // as a string pointer in every ioctl.
 type Tracker struct {
-	file    *os.File
-	fd      uintptr
-	devPath string
+	file        *os.File
+	fd          uintptr
+	devPath     string
+	devPathNull []byte // null-terminated, kept alive for pointer lifetime
 }
 
 // OpenTracker opens the bdevfilter device for blksnap CBT tracking.
@@ -26,9 +27,10 @@ func OpenTracker(devicePath string) (*Tracker, error) {
 		return nil, fmt.Errorf("blksnap: failed to open %s: %w", FilterDevice, err)
 	}
 	return &Tracker{
-		file:    f,
-		fd:      f.Fd(),
-		devPath: devicePath,
+		file:        f,
+		fd:          f.Fd(),
+		devPath:     devicePath,
+		devPathNull: append([]byte(devicePath), 0),
 	}, nil
 }
 
@@ -46,10 +48,13 @@ func (t *Tracker) Close() error {
 	return nil
 }
 
-// devPathPtr returns a uintptr to the block device path string.
+// devPathPtr returns a uintptr to the null-terminated device path.
+// The backing array is stored in Tracker.devPathNull to prevent GC.
 func (t *Tracker) devPathPtr() uintptr {
-	b := append([]byte(t.devPath), 0)
-	return uintptr(unsafe.Pointer(&b[0]))
+	if len(t.devPathNull) == 0 {
+		return 0
+	}
+	return uintptr(unsafe.Pointer(&t.devPathNull[0]))
 }
 
 // Attach attaches the blksnap filter to the block device through bdevfilter.
