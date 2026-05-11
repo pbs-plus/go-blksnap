@@ -184,6 +184,7 @@ ls -la /dev/veeamblksnap /dev/bdevfilter
 |---------|-------------|----------|
 | `modprobe: FATAL: Module veeamblksnap not found` | Module not installed | Install pre-built package or build from VAL-13.0 source |
 | `Failed to load module` | Kernel mismatch or missing headers | Ensure `kernel-devel`/`linux-headers` matches `uname -r` |
+| DKMS build fails (kernel ≥ 6.17) | Package too old for your kernel | Use VAL-13.0.1 branch: `git clone -b VAL-13.0.1 ...` and build manually |
 | Module loads but no `/dev/veeamblksnap` | Old veeamsnap module in use | Upgrade to veeamblksnap (kernel ≥ 5.10); check `lsmod \| grep veeam` |
 | Secure Boot blocks module | Unsigned module | Enroll `blksnap-ueficert` key with `mokutil` or disable Secure Boot |
 
