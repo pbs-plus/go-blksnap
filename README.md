@@ -80,9 +80,9 @@ as part of Veeam Agent for Linux (free community edition available).
 
 > **Alternative**: If you can't use the release package, add the key and repo manually:
 > ```bash
-> # Debian/Ubuntu
-> curl -fsSL https://repository.veeam.com/keys/veeam.gpg | \
->   sudo gpg --dearmor -o /usr/share/keyrings/veeam.gpg
+> # Debian/Ubuntu — download the key directly (already binary format, no dearmor needed)
+> sudo curl -fsSL https://repository.veeam.com/keys/DEB-9BB5AC67.gpg \
+>   -o /usr/share/keyrings/veeam.gpg
 > echo "deb [signed-by=/usr/share/keyrings/veeam.gpg] https://repository.veeam.com/backup/linux/agent/dpkg/debian/public stable veeam" | \
 >   sudo tee /etc/apt/sources.list.d/veeam.list
 > sudo apt-get update
