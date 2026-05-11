@@ -13,8 +13,10 @@ The upstream blksnap module provides non-persistent block device snapshots with
 Change Block Tracking (CBT), enabling incremental and differential backup
 workflows.
 
-> **Important**: This library targets the [VAL-13.0](https://github.com/veeam/blksnap/tree/VAL-13.0)
-> standalone branch of blksnap (modules: `veeamblksnap` + `bdevfilter`).
+> **Important**: This library targets the [VAL-13.0 / VAL-13.0.1](https://github.com/veeam/blksnap/branches/all?query=VAL-13.0)
+> standalone branches (modules: `veeamblksnap` + `bdevfilter`).
+> The UAPI is identical between these branches — 13.0.1 only adds kernel
+> module fixes for 6.17+, with no API changes.
 
 - [Features](#features)
 - [Requirements](#requirements)
